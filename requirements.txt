@@ -1,0 +1,7 @@
+pandas>=2.0
+numpy>=1.24
+PyYAML>=6.0
+openpyxl>=3.1
+baostock>=0.9
+akshare>=1.10
+pytest>=8.0

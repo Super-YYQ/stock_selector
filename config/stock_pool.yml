@@ -1,0 +1,14 @@
+stock_pool:
+  min_list_days: 120
+  min_price: 3
+  min_avg_amount_20d: 100000000
+  exclude_st: true
+  exclude_suspended: true
+
+risk:
+  max_pct_chg_5d: 30
+  max_pct_chg_10d: 45
+  max_distance_ma20: 25
+  long_upper_shadow_ratio: 0.5
+  high_turnover_ratio: 25
+  high_volatility_20d: 0.08
