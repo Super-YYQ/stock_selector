@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
@@ -21,9 +21,24 @@ BAOSTOCK_DAILY_COLUMNS = {
     "pctChg": "pct_chg",
 }
 
+BAOSTOCK_INDEX_COLUMNS = {
+    "date": "trade_date",
+    "open": "open",
+    "high": "high",
+    "low": "low",
+    "close": "close",
+    "volume": "volume",
+    "amount": "amount",
+    "pctChg": "pct_chg",
+}
+
 
 def _strip_exchange(code: str) -> str:
     return code.split(".")[-1]
+
+
+def _exchange(code: str) -> str:
+    return code.split(".")[0] if "." in code else ("sh" if code.startswith(("6", "9")) else "sz")
 
 
 def normalize_baostock_daily(raw: pd.DataFrame) -> pd.DataFrame:
@@ -37,6 +52,35 @@ def normalize_baostock_daily(raw: pd.DataFrame) -> pd.DataFrame:
     for column in numeric_columns:
         df[column] = pd.to_numeric(df[column], errors="coerce")
     df["is_suspended"] = df["volume"].fillna(0).le(0)
+    return df.dropna(subset=["close"]).reset_index(drop=True)
+
+
+def normalize_baostock_stock_basic(raw: pd.DataFrame) -> pd.DataFrame:
+    required = {"code", "code_name", "ipoDate", "type", "status"}
+    missing = required - set(raw.columns)
+    if missing:
+        raise ValueError(f"baostock stock basic missing columns: {sorted(missing)}")
+    df = raw[list(required)].copy()
+    df = df[df["type"].astype(str).eq("1")].copy()
+    df["exchange"] = df["code"].astype(str).map(_exchange)
+    df["code"] = df["code"].astype(str).map(_strip_exchange)
+    df["name"] = df["code_name"].astype(str)
+    df["industry"] = ""
+    df["list_date"] = df["ipoDate"].astype(str)
+    df["is_st"] = df["name"].str.contains("ST", case=False, na=False).astype(int)
+    df["is_listed"] = df["status"].astype(str).eq("1").astype(int)
+    return df[["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"]].reset_index(drop=True)
+
+
+def normalize_baostock_index_daily(raw: pd.DataFrame, index_code: str) -> pd.DataFrame:
+    required = set(BAOSTOCK_INDEX_COLUMNS.keys())
+    missing = required - set(raw.columns)
+    if missing:
+        raise ValueError(f"baostock index daily missing columns: {sorted(missing)}")
+    df = raw[list(BAOSTOCK_INDEX_COLUMNS.keys())].rename(columns=BAOSTOCK_INDEX_COLUMNS)
+    df.insert(0, "index_code", index_code)
+    for column in ["open", "high", "low", "close", "volume", "amount", "pct_chg"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
     return df.dropna(subset=["close"]).reset_index(drop=True)
 
 
@@ -64,6 +108,24 @@ def normalize_akshare_sector(raw: pd.DataFrame, trade_date: str) -> pd.DataFrame
 class DataFetcher:
     start_date: str
 
+    def fetch_stock_basic(self) -> pd.DataFrame:
+        import baostock as bs
+
+        login = bs.login()
+        if login.error_code != "0":
+            raise RuntimeError(f"baostock login failed: {login.error_msg}")
+        try:
+            rs = bs.query_stock_basic(code_name="", code="")
+            if rs.error_code != "0":
+                raise RuntimeError(f"baostock stock basic query failed: {rs.error_msg}")
+            rows = []
+            while rs.next():
+                rows.append(rs.get_row_data())
+            raw = pd.DataFrame(rows, columns=rs.fields)
+            return normalize_baostock_stock_basic(raw) if not raw.empty else pd.DataFrame()
+        finally:
+            bs.logout()
+
     def fetch_stock_daily(self, code: str, end_date: str | None = None) -> pd.DataFrame:
         import baostock as bs
 
@@ -88,6 +150,33 @@ class DataFetcher:
                 rows.append(rs.get_row_data())
             raw = pd.DataFrame(rows, columns=rs.fields)
             return normalize_baostock_daily(raw) if not raw.empty else pd.DataFrame()
+        finally:
+            bs.logout()
+
+    def fetch_index_daily(self, index_code: str, end_date: str | None = None) -> pd.DataFrame:
+        import baostock as bs
+
+        bs_code = f"{index_code[:2]}.{index_code[2:]}"
+        end = end_date or date.today().strftime("%Y-%m-%d")
+        login = bs.login()
+        if login.error_code != "0":
+            raise RuntimeError(f"baostock login failed: {login.error_msg}")
+        try:
+            rs = bs.query_history_k_data_plus(
+                bs_code,
+                "date,open,high,low,close,volume,amount,pctChg",
+                start_date=self.start_date,
+                end_date=end,
+                frequency="d",
+                adjustflag="3",
+            )
+            if rs.error_code != "0":
+                raise RuntimeError(f"baostock index query failed for {index_code}: {rs.error_msg}")
+            rows = []
+            while rs.next():
+                rows.append(rs.get_row_data())
+            raw = pd.DataFrame(rows, columns=rs.fields)
+            return normalize_baostock_index_daily(raw, index_code) if not raw.empty else pd.DataFrame()
         finally:
             bs.logout()
 

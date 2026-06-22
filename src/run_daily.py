@@ -1,15 +1,17 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import logging
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from src.build_pool import build_stock_pool
-from src.config import load_config
+from src.config import AppConfig, load_config
 from src.database import Database
+from src.fetch_data import DataFetcher
 from src.market_score import calculate_market_score
 from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
@@ -17,6 +19,8 @@ from src.scoring import build_ranked_results
 from src.sector_score import calculate_sector_scores
 from src.stock_character import calculate_stock_character_scores
 from src.volume_price_score import calculate_volume_price_scores
+
+INDEX_CODES = ("sh000001", "sz399001", "sz399006")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -73,6 +77,56 @@ def _add_risk_inputs(factors: pd.DataFrame) -> pd.DataFrame:
     return enriched
 
 
+def update_market_data(
+    db: Database,
+    config: AppConfig,
+    report_date: str,
+    init: bool = False,
+    fetcher: Any | None = None,
+) -> dict[str, int]:
+    logger = logging.getLogger(__name__)
+    fetcher = fetcher or DataFetcher(config.data.start_date)
+    counts = {"stock_basic": 0, "stock_daily": 0, "index_daily": 0, "sector_daily": 0, "failed_symbols": 0}
+
+    if init:
+        basic = fetcher.fetch_stock_basic()
+        if not basic.empty:
+            counts["stock_basic"] = db.upsert_dataframe("stock_basic", basic, ["code"])
+    else:
+        basic = db.read_table("stock_basic")
+
+    if basic.empty:
+        logger.warning("无股票基础信息，跳过行情更新")
+        return counts
+
+    for code in basic["code"].dropna().astype(str).tolist():
+        try:
+            daily = fetcher.fetch_stock_daily(code, end_date=report_date)
+            if not daily.empty:
+                counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+        except Exception as exc:
+            counts["failed_symbols"] += 1
+            logger.warning("[%s] 日线数据更新失败: %s", code, exc)
+
+    for index_code in INDEX_CODES:
+        try:
+            index_daily = fetcher.fetch_index_daily(index_code, end_date=report_date)
+            if not index_daily.empty:
+                counts["index_daily"] += db.upsert_dataframe("index_daily", index_daily, ["index_code", "trade_date"])
+        except Exception as exc:
+            logger.warning("[%s] 指数数据更新失败: %s", index_code, exc)
+
+    try:
+        sector_daily = fetcher.fetch_sector_daily(report_date)
+        if not sector_daily.empty:
+            counts["sector_daily"] = db.upsert_dataframe("sector_daily", sector_daily, ["sector_name", "trade_date"])
+    except Exception as exc:
+        logger.warning("板块数据更新失败: %s", exc)
+
+    logger.info("数据更新完成: %s", counts)
+    return counts
+
+
 def run(argv: list[str] | None = None) -> Path | None:
     args = parse_args(argv)
     preliminary_date = args.date or date.today().strftime("%Y-%m-%d")
@@ -82,8 +136,13 @@ def run(argv: list[str] | None = None) -> Path | None:
     db = Database(config.data.database)
     db.initialize()
 
+    existing_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
     if args.init:
-        logger.info("初始化模式已启动。当前版本会初始化数据库；历史数据更新可通过后续数据接入扩展执行。")
+        logger.info("初始化模式已启动，开始更新免费数据源")
+        update_market_data(db, config, preliminary_date, init=True)
+    elif not existing_basic.empty:
+        logger.info("开始执行每日增量数据更新")
+        update_market_data(db, config, preliminary_date, init=False)
 
     stock_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
     stock_daily = _safe_read(
