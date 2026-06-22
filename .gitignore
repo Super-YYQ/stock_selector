@@ -7,3 +7,4 @@ data/raw/
 data/processed/
 logs/
 reports/
+.worktrees/
