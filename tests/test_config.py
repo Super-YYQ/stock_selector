@@ -18,6 +18,10 @@ features:
   enable_sector_score: false
 scoring:
   risk_penalty_max: 18
+strategies:
+  enabled:
+    - ma_volume
+  strategy_score_weight: 12
 """,
         encoding="utf-8",
     )
@@ -43,6 +47,8 @@ risk:
     assert config.stock_pool.min_list_days == 120
     assert config.risk.max_pct_chg_5d == 22
     assert config.scoring.risk_penalty_max == 18
+    assert config.strategies.enabled == ["ma_volume"]
+    assert config.strategies.strategy_score_weight == 12
 
 
 def test_load_config_rejects_invalid_threshold(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import logging
@@ -17,6 +17,7 @@ from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
 from src.scoring import build_ranked_results
 from src.sector_score import calculate_sector_scores
+from src.strategies.registry import run_enabled_strategies
 from src.stock_character import calculate_stock_character_scores
 from src.volume_price_score import calculate_volume_price_scores
 
@@ -175,10 +176,12 @@ def run(argv: list[str] | None = None) -> Path | None:
     factors = factors.merge(sector_scores, on=["code", "industry"], how="left")
     factors = factors.merge(character, on="code", how="left")
     factors = factors.merge(volume_price, on="code", how="left")
+    strategy_scores = run_enabled_strategies(stock_daily, report_date, factors, config.strategies.enabled)
+    factors = factors.merge(strategy_scores, on="code", how="left")
     factors = _add_risk_inputs(factors)
     risk = calculate_risk_penalties(factors, config.risk, config.scoring)
     factors = factors.merge(risk, on="code", how="left")
-    ranked, top50, top10 = build_ranked_results(factors, market, config.scoring, config.report)
+    ranked, top50, top10 = build_ranked_results(factors, market, config.scoring, config.report, config.strategies.strategy_score_weight)
     report_path = write_excel_report(config.report.output_dir, report_date, market, strong_sectors, top50, top10, ranked, filtered)
 
     print(f"今日市场环境：{market['market_label']}")

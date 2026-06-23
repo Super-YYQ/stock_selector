@@ -20,6 +20,9 @@ def test_build_ranked_results_weights_scores_and_builds_text() -> None:
                 "sector_score_raw": 90,
                 "stock_character_score_raw": 80,
                 "volume_price_score_raw": 85,
+                "strategy_score_raw": 100,
+                "matched_strategies": "均线放量突破、RPS强势突破",
+                "strategy_reason": "命中策略：均线放量突破、RPS强势突破",
                 "risk_penalty": 5,
                 "sector_reason": "板块走强",
                 "character_reason": "股性活跃",
@@ -39,6 +42,9 @@ def test_build_ranked_results_weights_scores_and_builds_text() -> None:
                 "sector_score_raw": 30,
                 "stock_character_score_raw": 20,
                 "volume_price_score_raw": 25,
+                "strategy_score_raw": 0,
+                "matched_strategies": "",
+                "strategy_reason": "",
                 "risk_penalty": 0,
                 "sector_reason": "板块一般",
                 "character_reason": "股性一般",
@@ -59,5 +65,7 @@ def test_build_ranked_results_weights_scores_and_builds_text() -> None:
     assert ranked.iloc[0]["code"] == "000001"
     assert top50["code"].tolist() == ["000001"]
     assert top10["code"].tolist() == ["000001"]
+    assert ranked.iloc[0]["strategy_score"] == 15
     assert "放量突破" in ranked.iloc[0]["selection_reason"]
+    assert "命中策略" in ranked.iloc[0]["selection_reason"]
     assert "不追高" in ranked.iloc[0]["next_day_condition"]

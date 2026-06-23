@@ -33,6 +33,9 @@ def test_write_excel_report_creates_required_sheets(tmp_path: Path) -> None:
                 "sector_score": 22,
                 "stock_character_score": 16,
                 "volume_price_score": 21,
+                "strategy_score": 15,
+                "matched_strategies": "均线放量突破",
+                "strategy_reason": "命中策略：均线放量突破",
                 "risk_penalty": 5,
                 "selection_reason": "放量突破",
                 "next_day_condition": "不追高",
@@ -48,3 +51,4 @@ def test_write_excel_report_creates_required_sheets(tmp_path: Path) -> None:
     workbook = load_workbook(path)
     assert workbook.sheetnames == ["市场环境", "强势板块", "Top50观察名单", "Top10重点关注", "风险过滤名单", "原始评分明细"]
     assert workbook["Top50观察名单"]["A1"].value == "排名"
+    assert workbook["Top50观察名单"]["Q1"].value == "命中策略"

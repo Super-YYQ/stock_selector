@@ -7,6 +7,15 @@ from typing import Any
 import yaml
 
 
+DEFAULT_ENABLED_STRATEGIES = [
+    "ma_volume",
+    "turtle_breakout",
+    "rps_breakout",
+    "pullback_stable",
+    "limit_up_shakeout",
+]
+
+
 @dataclass(frozen=True)
 class DataConfig:
     provider: str = "mixed"
@@ -39,6 +48,12 @@ class ScoringConfig:
 
 
 @dataclass(frozen=True)
+class StrategyConfig:
+    enabled: list[str] = field(default_factory=lambda: list(DEFAULT_ENABLED_STRATEGIES))
+    strategy_score_weight: float = 15
+
+
+@dataclass(frozen=True)
 class StockPoolConfig:
     min_list_days: int = 120
     min_price: float = 3
@@ -63,6 +78,7 @@ class AppConfig:
     report: ReportConfig = field(default_factory=ReportConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
+    strategies: StrategyConfig = field(default_factory=StrategyConfig)
     stock_pool: StockPoolConfig = field(default_factory=StockPoolConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
 
@@ -95,6 +111,8 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("top_observe must be greater than or equal to top_focus")
     if config.scoring.risk_penalty_max < 0:
         raise ValueError("risk_penalty_max must be non-negative")
+    if config.strategies.strategy_score_weight < 0:
+        raise ValueError("strategy_score_weight must be non-negative")
 
 
 def load_config(config_dir: str | Path = "config") -> AppConfig:
@@ -107,6 +125,7 @@ def load_config(config_dir: str | Path = "config") -> AppConfig:
         report=ReportConfig(**_section(strategy, "report")),
         features=FeatureConfig(**_section(strategy, "features")),
         scoring=ScoringConfig(**_section(strategy, "scoring")),
+        strategies=StrategyConfig(**_section(strategy, "strategies")),
         stock_pool=StockPoolConfig(**_section(stock_pool, "stock_pool")),
         risk=RiskConfig(**_section(stock_pool, "risk")),
     )

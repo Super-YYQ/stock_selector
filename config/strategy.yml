@@ -20,3 +20,12 @@ scoring:
   relative_strength_weight: 15
   market_adjust_weight: 10
   risk_penalty_max: 20
+
+strategies:
+  enabled:
+    - ma_volume
+    - turtle_breakout
+    - rps_breakout
+    - pullback_stable
+    - limit_up_shakeout
+  strategy_score_weight: 15
