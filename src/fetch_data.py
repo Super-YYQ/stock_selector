@@ -105,6 +105,12 @@ def normalize_akshare_sector(raw: pd.DataFrame, trade_date: str) -> pd.DataFrame
     return df[["sector_name", "trade_date", "pct_chg", "amount"]].dropna(subset=["sector_name"]).reset_index(drop=True)
 
 
+def _is_baostock_not_logged_in(error_msg: str) -> bool:
+    message = str(error_msg)
+    lowered = message.lower()
+    return "用户未登录" in message or "not login" in lowered or "not logged" in lowered
+
+
 @dataclass
 class DataFetcher:
     start_date: str
@@ -137,9 +143,16 @@ class DataFetcher:
         self._baostock_logged_in = False
         self._bs = None
 
+    def _query_with_relogin_retry(self, query: Any) -> Any:
+        rs = query(self._login_baostock())
+        if rs.error_code == "0" or not _is_baostock_not_logged_in(rs.error_msg):
+            return rs
+        logger.warning("baostock session expired; relogin and retry once")
+        self.close()
+        return query(self._login_baostock())
+
     def fetch_stock_basic(self) -> pd.DataFrame:
-        bs = self._login_baostock()
-        rs = bs.query_stock_basic(code_name="", code="")
+        rs = self._query_with_relogin_retry(lambda bs: bs.query_stock_basic(code_name="", code=""))
         if rs.error_code != "0":
             raise RuntimeError(f"baostock stock basic query failed: {rs.error_msg}")
         rows = []
@@ -154,17 +167,18 @@ class DataFetcher:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> pd.DataFrame:
-        bs = self._login_baostock()
         bs_code = f"sh.{code}" if code.startswith(("6", "9")) else f"sz.{code}"
         start = start_date or self.start_date
         end = end_date or date.today().strftime("%Y-%m-%d")
-        rs = bs.query_history_k_data_plus(
-            bs_code,
-            "date,code,open,high,low,close,volume,amount,turn,pctChg",
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag="1",
+        rs = self._query_with_relogin_retry(
+            lambda bs: bs.query_history_k_data_plus(
+                bs_code,
+                "date,code,open,high,low,close,volume,amount,turn,pctChg",
+                start_date=start,
+                end_date=end,
+                frequency="d",
+                adjustflag="1",
+            )
         )
         if rs.error_code != "0":
             raise RuntimeError(f"baostock query failed for {code}: {rs.error_msg}")
@@ -180,17 +194,18 @@ class DataFetcher:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> pd.DataFrame:
-        bs = self._login_baostock()
         bs_code = f"{index_code[:2]}.{index_code[2:]}"
         start = start_date or self.start_date
         end = end_date or date.today().strftime("%Y-%m-%d")
-        rs = bs.query_history_k_data_plus(
-            bs_code,
-            "date,open,high,low,close,volume,amount,pctChg",
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag="3",
+        rs = self._query_with_relogin_retry(
+            lambda bs: bs.query_history_k_data_plus(
+                bs_code,
+                "date,open,high,low,close,volume,amount,pctChg",
+                start_date=start,
+                end_date=end,
+                frequency="d",
+                adjustflag="3",
+            )
         )
         if rs.error_code != "0":
             raise RuntimeError(f"baostock index query failed for {index_code}: {rs.error_msg}")

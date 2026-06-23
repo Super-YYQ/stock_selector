@@ -182,3 +182,72 @@ def test_data_fetcher_reuses_baostock_login_across_context(monkeypatch) -> None:
 
     assert fake.login_count == 1
     assert fake.logout_count == 1
+
+
+def test_data_fetcher_relogs_and_retries_when_baostock_session_expires(monkeypatch) -> None:
+    import sys
+
+    from src.fetch_data import DataFetcher
+
+    class LoginResult:
+        error_code = "0"
+        error_msg = ""
+
+    class QueryResult:
+        def __init__(self, error_code: str, error_msg: str, fields: list[str] | None = None, rows: list[list[str]] | None = None) -> None:
+            self.error_code = error_code
+            self.error_msg = error_msg
+            self.fields = fields or []
+            self._rows = rows or []
+            self._index = -1
+
+        def next(self) -> bool:
+            self._index += 1
+            return self._index < len(self._rows)
+
+        def get_row_data(self) -> list[str]:
+            return self._rows[self._index]
+
+    class FakeBaostock:
+        def __init__(self) -> None:
+            self.login_count = 0
+            self.logout_count = 0
+            self.query_count = 0
+
+        def login(self) -> LoginResult:
+            self.login_count += 1
+            return LoginResult()
+
+        def logout(self) -> None:
+            self.logout_count += 1
+
+        def query_history_k_data_plus(
+            self,
+            code: str,
+            fields: str,
+            start_date: str,
+            end_date: str,
+            frequency: str,
+            adjustflag: str,
+        ) -> QueryResult:
+            self.query_count += 1
+            if self.query_count == 1:
+                return QueryResult("10002007", "\u7528\u6237\u672a\u767b\u5f55")
+            return QueryResult(
+                "0",
+                "",
+                ["date", "code", "open", "high", "low", "close", "volume", "amount", "turn", "pctChg"],
+                [["2026-06-22", code, "10", "11", "9", "10.5", "1000", "105000", "1.2", "2.0"]],
+            )
+
+    fake = FakeBaostock()
+    monkeypatch.setitem(sys.modules, "baostock", fake)
+
+    fetcher = DataFetcher("2026-01-01")
+    with fetcher:
+        daily = fetcher.fetch_stock_daily("600000", end_date="2026-06-22")
+
+    assert daily["code"].tolist() == ["600000"]
+    assert fake.query_count == 2
+    assert fake.login_count == 2
+    assert fake.logout_count == 2
