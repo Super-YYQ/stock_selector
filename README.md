@@ -1,17 +1,17 @@
-# 免费版 A 股盘后多因子选股助手
+# 免费（乞丐）版 A 股盘后多因子选股助手
 
 这是一个个人本地运行的 A 股盘后复盘工具。它每天收盘后更新免费数据源，按市场环境、行业热度、历史股性、量价结构、相对强弱、策略命中和风险扣分生成观察名单。
 
 本项目不是投资建议，不做自动交易，不连接券商接口，不使用实时行情。选出的股票只用于第二天人工观察。
 
-## 你现在应该怎么开始
+## 应该怎么开始
 
-如果你只是想先跑起来，按下面 5 步走。
+如果只是想先跑起来，按下面 5 步走。
 
 ### 1. 打开 PowerShell，进入项目目录
 
 ```powershell
-cd E:\我的git项目\Github\stock_selector
+cd \仓库路径\
 ```
 
 ### 2. 确认 Python 版本
@@ -51,7 +51,7 @@ py -3.12 -m venv .venv
 以后每天再次使用时，只需要进入目录并激活虚拟环境：
 
 ```powershell
-cd E:\我的git项目\Github\stock_selector
+cd \仓库路径\
 .\.venv\Scripts\activate
 ```
 
@@ -88,7 +88,7 @@ python run_daily.py --init
 每天收盘后，打开 PowerShell：
 
 ```powershell
-cd E:\我的git项目\Github\stock_selector
+cd \仓库路径\
 .\.venv\Scripts\activate
 python run_daily.py
 ```
