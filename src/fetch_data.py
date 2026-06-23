@@ -1,8 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 import pandas as pd
 
@@ -107,78 +108,85 @@ def normalize_akshare_sector(raw: pd.DataFrame, trade_date: str) -> pd.DataFrame
 @dataclass
 class DataFetcher:
     start_date: str
+    _bs: Any = field(default=None, init=False, repr=False)
+    _baostock_logged_in: bool = field(default=False, init=False, repr=False)
+
+    def __enter__(self) -> DataFetcher:
+        self._login_baostock()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+    def _login_baostock(self) -> Any:
+        if self._baostock_logged_in and self._bs is not None:
+            return self._bs
+
+        import baostock as bs
+
+        login = bs.login()
+        if login.error_code != "0":
+            raise RuntimeError(f"baostock login failed: {login.error_msg}")
+        self._bs = bs
+        self._baostock_logged_in = True
+        return bs
+
+    def close(self) -> None:
+        if self._baostock_logged_in and self._bs is not None:
+            self._bs.logout()
+        self._baostock_logged_in = False
+        self._bs = None
 
     def fetch_stock_basic(self) -> pd.DataFrame:
-        import baostock as bs
-
-        login = bs.login()
-        if login.error_code != "0":
-            raise RuntimeError(f"baostock login failed: {login.error_msg}")
-        try:
-            rs = bs.query_stock_basic(code_name="", code="")
-            if rs.error_code != "0":
-                raise RuntimeError(f"baostock stock basic query failed: {rs.error_msg}")
-            rows = []
-            while rs.next():
-                rows.append(rs.get_row_data())
-            raw = pd.DataFrame(rows, columns=rs.fields)
-            return normalize_baostock_stock_basic(raw) if not raw.empty else pd.DataFrame()
-        finally:
-            bs.logout()
+        bs = self._login_baostock()
+        rs = bs.query_stock_basic(code_name="", code="")
+        if rs.error_code != "0":
+            raise RuntimeError(f"baostock stock basic query failed: {rs.error_msg}")
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        raw = pd.DataFrame(rows, columns=rs.fields)
+        return normalize_baostock_stock_basic(raw) if not raw.empty else pd.DataFrame()
 
     def fetch_stock_daily(self, code: str, end_date: str | None = None) -> pd.DataFrame:
-        import baostock as bs
-
+        bs = self._login_baostock()
         bs_code = f"sh.{code}" if code.startswith(("6", "9")) else f"sz.{code}"
         end = end_date or date.today().strftime("%Y-%m-%d")
-        login = bs.login()
-        if login.error_code != "0":
-            raise RuntimeError(f"baostock login failed: {login.error_msg}")
-        try:
-            rs = bs.query_history_k_data_plus(
-                bs_code,
-                "date,code,open,high,low,close,volume,amount,turn,pctChg",
-                start_date=self.start_date,
-                end_date=end,
-                frequency="d",
-                adjustflag="1",
-            )
-            if rs.error_code != "0":
-                raise RuntimeError(f"baostock query failed for {code}: {rs.error_msg}")
-            rows = []
-            while rs.next():
-                rows.append(rs.get_row_data())
-            raw = pd.DataFrame(rows, columns=rs.fields)
-            return normalize_baostock_daily(raw) if not raw.empty else pd.DataFrame()
-        finally:
-            bs.logout()
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,code,open,high,low,close,volume,amount,turn,pctChg",
+            start_date=self.start_date,
+            end_date=end,
+            frequency="d",
+            adjustflag="1",
+        )
+        if rs.error_code != "0":
+            raise RuntimeError(f"baostock query failed for {code}: {rs.error_msg}")
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        raw = pd.DataFrame(rows, columns=rs.fields)
+        return normalize_baostock_daily(raw) if not raw.empty else pd.DataFrame()
 
     def fetch_index_daily(self, index_code: str, end_date: str | None = None) -> pd.DataFrame:
-        import baostock as bs
-
+        bs = self._login_baostock()
         bs_code = f"{index_code[:2]}.{index_code[2:]}"
         end = end_date or date.today().strftime("%Y-%m-%d")
-        login = bs.login()
-        if login.error_code != "0":
-            raise RuntimeError(f"baostock login failed: {login.error_msg}")
-        try:
-            rs = bs.query_history_k_data_plus(
-                bs_code,
-                "date,open,high,low,close,volume,amount,pctChg",
-                start_date=self.start_date,
-                end_date=end,
-                frequency="d",
-                adjustflag="3",
-            )
-            if rs.error_code != "0":
-                raise RuntimeError(f"baostock index query failed for {index_code}: {rs.error_msg}")
-            rows = []
-            while rs.next():
-                rows.append(rs.get_row_data())
-            raw = pd.DataFrame(rows, columns=rs.fields)
-            return normalize_baostock_index_daily(raw, index_code) if not raw.empty else pd.DataFrame()
-        finally:
-            bs.logout()
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,open,high,low,close,volume,amount,pctChg",
+            start_date=self.start_date,
+            end_date=end,
+            frequency="d",
+            adjustflag="3",
+        )
+        if rs.error_code != "0":
+            raise RuntimeError(f"baostock index query failed for {index_code}: {rs.error_msg}")
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        raw = pd.DataFrame(rows, columns=rs.fields)
+        return normalize_baostock_index_daily(raw, index_code) if not raw.empty else pd.DataFrame()
 
     def fetch_sector_daily(self, trade_date: str) -> pd.DataFrame:
         try:

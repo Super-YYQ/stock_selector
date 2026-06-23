@@ -1,4 +1,4 @@
-﻿import pandas as pd
+import pandas as pd
 
 from src.fetch_data import (
     normalize_akshare_sector,
@@ -109,3 +109,76 @@ def test_normalize_baostock_index_daily_sets_index_code() -> None:
     assert normalized.loc[0, "index_code"] == "sh000001"
     assert normalized.loc[0, "trade_date"] == "2026-06-22"
     assert normalized.loc[0, "pct_chg"] == 1.2
+
+def test_data_fetcher_reuses_baostock_login_across_context(monkeypatch) -> None:
+    import sys
+
+    from src.fetch_data import DataFetcher
+
+    class LoginResult:
+        error_code = "0"
+        error_msg = ""
+
+    class QueryResult:
+        def __init__(self, fields: list[str], rows: list[list[str]]) -> None:
+            self.error_code = "0"
+            self.error_msg = ""
+            self.fields = fields
+            self._rows = rows
+            self._index = -1
+
+        def next(self) -> bool:
+            self._index += 1
+            return self._index < len(self._rows)
+
+        def get_row_data(self) -> list[str]:
+            return self._rows[self._index]
+
+    class FakeBaostock:
+        def __init__(self) -> None:
+            self.login_count = 0
+            self.logout_count = 0
+
+        def login(self) -> LoginResult:
+            self.login_count += 1
+            return LoginResult()
+
+        def logout(self) -> None:
+            self.logout_count += 1
+
+        def query_stock_basic(self, code_name: str, code: str) -> QueryResult:
+            return QueryResult(
+                ["code", "code_name", "ipoDate", "type", "status"],
+                [["sh.600000", "浦发银行", "1999-11-10", "1", "1"]],
+            )
+
+        def query_history_k_data_plus(
+            self,
+            code: str,
+            fields: str,
+            start_date: str,
+            end_date: str,
+            frequency: str,
+            adjustflag: str,
+        ) -> QueryResult:
+            if "code" in fields.split(","):
+                return QueryResult(
+                    ["date", "code", "open", "high", "low", "close", "volume", "amount", "turn", "pctChg"],
+                    [["2026-06-22", code, "10", "11", "9", "10.5", "1000", "105000", "1.2", "2.0"]],
+                )
+            return QueryResult(
+                ["date", "open", "high", "low", "close", "volume", "amount", "pctChg"],
+                [["2026-06-22", "3000", "3020", "2990", "3010", "100", "200", "0.5"]],
+            )
+
+    fake = FakeBaostock()
+    monkeypatch.setitem(sys.modules, "baostock", fake)
+
+    fetcher = DataFetcher("2026-01-01")
+    with fetcher:
+        assert fetcher.fetch_stock_basic()["code"].tolist() == ["600000"]
+        assert fetcher.fetch_stock_daily("600000", end_date="2026-06-22")["code"].tolist() == ["600000"]
+        assert fetcher.fetch_index_daily("sh000001", end_date="2026-06-22")["index_code"].tolist() == ["sh000001"]
+
+    assert fake.login_count == 1
+    assert fake.logout_count == 1

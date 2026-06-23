@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from contextlib import nullcontext
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,12 @@ def _add_risk_inputs(factors: pd.DataFrame) -> pd.DataFrame:
     return enriched
 
 
+def _managed_fetcher(fetcher: Any):
+    if hasattr(fetcher, "__enter__") and hasattr(fetcher, "__exit__"):
+        return fetcher
+    return nullcontext(fetcher)
+
+
 def update_market_data(
     db: Database,
     config: AppConfig,
@@ -89,40 +96,47 @@ def update_market_data(
     fetcher = fetcher or DataFetcher(config.data.start_date)
     counts = {"stock_basic": 0, "stock_daily": 0, "index_daily": 0, "sector_daily": 0, "failed_symbols": 0}
 
-    if init:
-        basic = fetcher.fetch_stock_basic()
-        if not basic.empty:
-            counts["stock_basic"] = db.upsert_dataframe("stock_basic", basic, ["code"])
-    else:
-        basic = db.read_table("stock_basic")
+    with _managed_fetcher(fetcher) as active_fetcher:
+        if init:
+            basic = active_fetcher.fetch_stock_basic()
+            if not basic.empty:
+                counts["stock_basic"] = db.upsert_dataframe("stock_basic", basic, ["code"])
+        else:
+            basic = db.read_table("stock_basic")
 
-    if basic.empty:
-        logger.warning("无股票基础信息，跳过行情更新")
-        return counts
+        if basic.empty:
+            logger.warning("无股票基础信息，跳过行情更新")
+            return counts
 
-    for code in basic["code"].dropna().astype(str).tolist():
+        codes = basic["code"].dropna().astype(str).tolist()
+        total = len(codes)
+        for position, code in enumerate(codes, start=1):
+            if position == 1 or position % 100 == 0 or position == total:
+                logger.info("正在更新个股日线: %s/%s %s", position, total, code)
+            try:
+                daily = active_fetcher.fetch_stock_daily(code, end_date=report_date)
+                if not daily.empty:
+                    counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+            except Exception as exc:
+                counts["failed_symbols"] += 1
+                logger.warning("[%s] 日线数据更新失败: %s", code, exc)
+
+        for index_code in INDEX_CODES:
+            try:
+                logger.info("正在更新指数日线: %s", index_code)
+                index_daily = active_fetcher.fetch_index_daily(index_code, end_date=report_date)
+                if not index_daily.empty:
+                    counts["index_daily"] += db.upsert_dataframe("index_daily", index_daily, ["index_code", "trade_date"])
+            except Exception as exc:
+                logger.warning("[%s] 指数数据更新失败: %s", index_code, exc)
+
         try:
-            daily = fetcher.fetch_stock_daily(code, end_date=report_date)
-            if not daily.empty:
-                counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+            logger.info("正在更新行业板块数据")
+            sector_daily = active_fetcher.fetch_sector_daily(report_date)
+            if not sector_daily.empty:
+                counts["sector_daily"] = db.upsert_dataframe("sector_daily", sector_daily, ["sector_name", "trade_date"])
         except Exception as exc:
-            counts["failed_symbols"] += 1
-            logger.warning("[%s] 日线数据更新失败: %s", code, exc)
-
-    for index_code in INDEX_CODES:
-        try:
-            index_daily = fetcher.fetch_index_daily(index_code, end_date=report_date)
-            if not index_daily.empty:
-                counts["index_daily"] += db.upsert_dataframe("index_daily", index_daily, ["index_code", "trade_date"])
-        except Exception as exc:
-            logger.warning("[%s] 指数数据更新失败: %s", index_code, exc)
-
-    try:
-        sector_daily = fetcher.fetch_sector_daily(report_date)
-        if not sector_daily.empty:
-            counts["sector_daily"] = db.upsert_dataframe("sector_daily", sector_daily, ["sector_name", "trade_date"])
-    except Exception as exc:
-        logger.warning("板块数据更新失败: %s", exc)
+            logger.warning("板块数据更新失败: %s", exc)
 
     logger.info("数据更新完成: %s", counts)
     return counts
@@ -133,64 +147,75 @@ def run(argv: list[str] | None = None) -> Path | None:
     preliminary_date = args.date or date.today().strftime("%Y-%m-%d")
     setup_logging(preliminary_date)
     logger = logging.getLogger(__name__)
-    config = load_config()
-    db = Database(config.data.database)
-    db.initialize()
 
-    existing_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
-    if args.init:
-        logger.info("初始化模式已启动，开始更新免费数据源")
-        update_market_data(db, config, preliminary_date, init=True)
-    elif not existing_basic.empty:
-        logger.info("开始执行每日增量数据更新")
-        update_market_data(db, config, preliminary_date, init=False)
+    try:
+        config = load_config()
+        db = Database(config.data.database)
+        db.initialize()
 
-    stock_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
-    stock_daily = _safe_read(
-        db,
-        "stock_daily",
-        ["code", "trade_date", "open", "high", "low", "close", "amount", "pct_chg", "turnover_rate", "is_suspended"],
-    )
-    index_daily = _safe_read(db, "index_daily", ["index_code", "trade_date", "close", "amount", "pct_chg"])
-    sector_daily = _safe_read(db, "sector_daily", ["sector_name", "trade_date", "pct_chg", "amount"])
-    latest_trade_date = None if stock_daily.empty else str(stock_daily["trade_date"].max())
-    report_date = resolve_report_date(args.date, latest_trade_date)
+        existing_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
+        if args.init:
+            logger.info("初始化模式已启动，开始更新免费数据源")
+            update_market_data(db, config, preliminary_date, init=True)
+        elif not existing_basic.empty:
+            logger.info("开始执行每日增量数据更新")
+            update_market_data(db, config, preliminary_date, init=False)
 
-    if stock_basic.empty or stock_daily.empty:
-        logger.warning("本地数据库暂无足够行情数据，请先完成数据初始化或导入历史行情。")
-        return None
+        stock_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
+        stock_daily = _safe_read(
+            db,
+            "stock_daily",
+            ["code", "trade_date", "open", "high", "low", "close", "amount", "pct_chg", "turnover_rate", "is_suspended"],
+        )
+        index_daily = _safe_read(db, "index_daily", ["index_code", "trade_date", "close", "amount", "pct_chg"])
+        sector_daily = _safe_read(db, "sector_daily", ["sector_name", "trade_date", "pct_chg", "amount"])
+        latest_trade_date = None if stock_daily.empty else str(stock_daily["trade_date"].max())
+        report_date = resolve_report_date(args.date, latest_trade_date)
 
-    eligible, filtered = build_stock_pool(stock_basic, stock_daily, report_date, config.stock_pool)
-    market = calculate_market_score(index_daily, stock_daily, report_date)
-    sector_scores, strong_sectors = calculate_sector_scores(sector_daily, stock_basic, stock_daily, report_date)
-    character = calculate_stock_character_scores(stock_daily, report_date)
-    volume_price = calculate_volume_price_scores(stock_daily, report_date)
+        if stock_basic.empty or stock_daily.empty:
+            logger.warning("本地数据库暂无足够行情数据，请先完成数据初始化或导入历史行情。")
+            return None
 
-    latest = _latest_stock_rows(stock_daily, report_date)
-    factor_columns = ["code", "pct_chg", "turnover_rate"]
-    factors = eligible.drop(columns=[column for column in factor_columns[1:] if column in eligible.columns]).merge(
-        latest[factor_columns],
-        on="code",
-        how="left",
-    )
-    factors = factors.merge(sector_scores, on=["code", "industry"], how="left")
-    factors = factors.merge(character, on="code", how="left")
-    factors = factors.merge(volume_price, on="code", how="left")
-    strategy_scores = run_enabled_strategies(stock_daily, report_date, factors, config.strategies.enabled)
-    factors = factors.merge(strategy_scores, on="code", how="left")
-    factors = _add_risk_inputs(factors)
-    risk = calculate_risk_penalties(factors, config.risk, config.scoring)
-    factors = factors.merge(risk, on="code", how="left")
-    ranked, top50, top10 = build_ranked_results(factors, market, config.scoring, config.report, config.strategies.strategy_score_weight)
-    report_path = write_excel_report(config.report.output_dir, report_date, market, strong_sectors, top50, top10, ranked, filtered)
+        eligible, filtered = build_stock_pool(stock_basic, stock_daily, report_date, config.stock_pool)
+        market = calculate_market_score(index_daily, stock_daily, report_date)
+        sector_scores, strong_sectors = calculate_sector_scores(sector_daily, stock_basic, stock_daily, report_date)
+        character = calculate_stock_character_scores(stock_daily, report_date)
+        volume_price = calculate_volume_price_scores(stock_daily, report_date)
 
-    print(f"今日市场环境：{market['market_label']}")
-    print(f"市场风险等级：{market['risk_level']}")
-    print(f"上涨家数占比：{market['up_ratio']}%")
-    print(f"涨停家数：{market['limit_up_count']}")
-    print(f"跌停家数：{market['limit_down_count']}")
-    print(f"报告路径：{report_path}")
-    return report_path
+        latest = _latest_stock_rows(stock_daily, report_date)
+        factor_columns = ["code", "pct_chg", "turnover_rate"]
+        factors = eligible.drop(columns=[column for column in factor_columns[1:] if column in eligible.columns]).merge(
+            latest[factor_columns],
+            on="code",
+            how="left",
+        )
+        factors = factors.merge(sector_scores, on=["code", "industry"], how="left")
+        factors = factors.merge(character, on="code", how="left")
+        factors = factors.merge(volume_price, on="code", how="left")
+        strategy_scores = run_enabled_strategies(stock_daily, report_date, factors, config.strategies.enabled)
+        factors = factors.merge(strategy_scores, on="code", how="left")
+        factors = _add_risk_inputs(factors)
+        risk = calculate_risk_penalties(factors, config.risk, config.scoring)
+        factors = factors.merge(risk, on="code", how="left")
+        ranked, top50, top10 = build_ranked_results(
+            factors,
+            market,
+            config.scoring,
+            config.report,
+            config.strategies.strategy_score_weight,
+        )
+        report_path = write_excel_report(config.report.output_dir, report_date, market, strong_sectors, top50, top10, ranked, filtered)
+
+        print(f"今日市场环境：{market['market_label']}")
+        print(f"市场风险等级：{market['risk_level']}")
+        print(f"上涨家数占比：{market['up_ratio']}%")
+        print(f"涨停家数：{market['limit_up_count']}")
+        print(f"跌停家数：{market['limit_down_count']}")
+        print(f"报告路径：{report_path}")
+        return report_path
+    except Exception:
+        logger.exception("每日任务执行失败")
+        raise
 
 
 if __name__ == "__main__":
