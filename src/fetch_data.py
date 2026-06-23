@@ -148,14 +148,20 @@ class DataFetcher:
         raw = pd.DataFrame(rows, columns=rs.fields)
         return normalize_baostock_stock_basic(raw) if not raw.empty else pd.DataFrame()
 
-    def fetch_stock_daily(self, code: str, end_date: str | None = None) -> pd.DataFrame:
+    def fetch_stock_daily(
+        self,
+        code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
         bs = self._login_baostock()
         bs_code = f"sh.{code}" if code.startswith(("6", "9")) else f"sz.{code}"
+        start = start_date or self.start_date
         end = end_date or date.today().strftime("%Y-%m-%d")
         rs = bs.query_history_k_data_plus(
             bs_code,
             "date,code,open,high,low,close,volume,amount,turn,pctChg",
-            start_date=self.start_date,
+            start_date=start,
             end_date=end,
             frequency="d",
             adjustflag="1",
@@ -168,14 +174,20 @@ class DataFetcher:
         raw = pd.DataFrame(rows, columns=rs.fields)
         return normalize_baostock_daily(raw) if not raw.empty else pd.DataFrame()
 
-    def fetch_index_daily(self, index_code: str, end_date: str | None = None) -> pd.DataFrame:
+    def fetch_index_daily(
+        self,
+        index_code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
         bs = self._login_baostock()
         bs_code = f"{index_code[:2]}.{index_code[2:]}"
+        start = start_date or self.start_date
         end = end_date or date.today().strftime("%Y-%m-%d")
         rs = bs.query_history_k_data_plus(
             bs_code,
             "date,open,high,low,close,volume,amount,pctChg",
-            start_date=self.start_date,
+            start_date=start,
             end_date=end,
             frequency="d",
             adjustflag="3",

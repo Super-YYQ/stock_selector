@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from contextlib import nullcontext
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,28 @@ def _managed_fetcher(fetcher: Any):
     return nullcontext(fetcher)
 
 
+def _latest_dates(df: pd.DataFrame, key_column: str, date_column: str = "trade_date") -> dict[str, str]:
+    if df.empty or key_column not in df.columns or date_column not in df.columns:
+        return {}
+    latest = df.dropna(subset=[key_column, date_column]).copy()
+    if latest.empty:
+        return {}
+    latest[key_column] = latest[key_column].astype(str)
+    latest[date_column] = latest[date_column].astype(str)
+    return latest.groupby(key_column)[date_column].max().to_dict()
+
+
+def _next_fetch_start(latest_date: str | None, fallback_start: str) -> str:
+    if not latest_date:
+        return fallback_start
+    parsed = datetime.strptime(str(latest_date), "%Y-%m-%d").date()
+    return (parsed + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _should_fetch(start_date: str, end_date: str) -> bool:
+    return start_date <= end_date
+
+
 def update_market_data(
     db: Database,
     config: AppConfig,
@@ -101,30 +123,49 @@ def update_market_data(
             basic = active_fetcher.fetch_stock_basic()
             if not basic.empty:
                 counts["stock_basic"] = db.upsert_dataframe("stock_basic", basic, ["code"])
+            existing_stock_daily = pd.DataFrame()
+            existing_index_daily = pd.DataFrame()
         else:
             basic = db.read_table("stock_basic")
+            existing_stock_daily = _safe_read(db, "stock_daily", ["code", "trade_date"])
+            existing_index_daily = _safe_read(db, "index_daily", ["index_code", "trade_date"])
 
         if basic.empty:
             logger.warning("无股票基础信息，跳过行情更新")
             return counts
 
+        latest_stock_dates = _latest_dates(existing_stock_daily, "code")
+        latest_index_dates = _latest_dates(existing_index_daily, "index_code")
         codes = basic["code"].dropna().astype(str).tolist()
         total = len(codes)
+        skipped_symbols = 0
+
         for position, code in enumerate(codes, start=1):
+            fetch_start = config.data.start_date if init else _next_fetch_start(latest_stock_dates.get(code), config.data.start_date)
+            if not _should_fetch(fetch_start, report_date):
+                skipped_symbols += 1
+                continue
             if position == 1 or position % 100 == 0 or position == total:
-                logger.info("正在更新个股日线: %s/%s %s", position, total, code)
+                logger.info("正在更新个股日线: %s/%s %s (%s -> %s)", position, total, code, fetch_start, report_date)
             try:
-                daily = active_fetcher.fetch_stock_daily(code, end_date=report_date)
+                daily = active_fetcher.fetch_stock_daily(code, start_date=fetch_start, end_date=report_date)
                 if not daily.empty:
                     counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
             except Exception as exc:
                 counts["failed_symbols"] += 1
                 logger.warning("[%s] 日线数据更新失败: %s", code, exc)
 
+        if skipped_symbols:
+            logger.info("已跳过 %s 只本地数据已更新到 %s 的股票", skipped_symbols, report_date)
+
         for index_code in INDEX_CODES:
+            fetch_start = config.data.start_date if init else _next_fetch_start(latest_index_dates.get(index_code), config.data.start_date)
+            if not _should_fetch(fetch_start, report_date):
+                logger.info("指数日线已是最新，跳过: %s", index_code)
+                continue
             try:
-                logger.info("正在更新指数日线: %s", index_code)
-                index_daily = active_fetcher.fetch_index_daily(index_code, end_date=report_date)
+                logger.info("正在更新指数日线: %s (%s -> %s)", index_code, fetch_start, report_date)
+                index_daily = active_fetcher.fetch_index_daily(index_code, start_date=fetch_start, end_date=report_date)
                 if not index_daily.empty:
                     counts["index_daily"] += db.upsert_dataframe("index_daily", index_daily, ["index_code", "trade_date"])
             except Exception as exc:
