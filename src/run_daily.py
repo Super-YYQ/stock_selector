@@ -120,9 +120,22 @@ def update_market_data(
 
     with _managed_fetcher(fetcher) as active_fetcher:
         if init:
-            basic = active_fetcher.fetch_stock_basic()
-            if not basic.empty:
-                counts["stock_basic"] = db.upsert_dataframe("stock_basic", basic, ["code"])
+            try:
+                basic = active_fetcher.fetch_stock_basic()
+            except Exception as exc:
+                fallback_basic = _safe_read(db, "stock_basic", ["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"])
+                if fallback_basic.empty:
+                    raise
+                logger.warning("股票基础信息更新失败，使用本地已有股票列表继续初始化: %s", exc)
+                basic = fallback_basic
+            else:
+                if not basic.empty:
+                    counts["stock_basic"] = db.upsert_dataframe("stock_basic", basic, ["code"])
+                else:
+                    fallback_basic = _safe_read(db, "stock_basic", ["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"])
+                    if not fallback_basic.empty:
+                        logger.warning("股票基础信息接口返回空数据，使用本地已有股票列表继续初始化")
+                        basic = fallback_basic
             existing_stock_daily = pd.DataFrame()
             existing_index_daily = pd.DataFrame()
         else:

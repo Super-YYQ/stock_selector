@@ -163,3 +163,38 @@ def test_update_market_data_fetches_incrementally_after_existing_daily_rows(tmp_
     assert fetcher.stock_daily_calls == [{"code": "000001", "start_date": "2026-06-21", "end_date": "2026-06-23"}]
     assert {call["index_code"]: call["start_date"] for call in fetcher.index_daily_calls}["sh000001"] == "2026-06-21"
     assert {call["index_code"]: call["start_date"] for call in fetcher.index_daily_calls}["sz399001"] == "2023-01-01"
+
+
+def test_init_uses_existing_stock_basic_when_remote_basic_fetch_fails(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(data=DataConfig(database=str(tmp_path / "stock.db"), start_date="2023-01-01"))
+    db.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {
+                    "code": "000001",
+                    "name": "Ping An Bank",
+                    "exchange": "sz",
+                    "industry": "Bank",
+                    "list_date": "1991-04-03",
+                    "is_st": 0,
+                    "is_listed": 1,
+                }
+            ]
+        ),
+        ["code"],
+    )
+
+    class BasicFailingFetcher(FakeFetcher):
+        def fetch_stock_basic(self) -> pd.DataFrame:
+            raise RuntimeError("baostock stock basic query failed: user not logged in")
+
+    fetcher = BasicFailingFetcher()
+
+    counts = update_market_data(db, config, "2026-06-22", init=True, fetcher=fetcher)
+
+    assert counts["stock_basic"] == 0
+    assert db.read_table("stock_daily")["code"].tolist() == ["000001"]
+    assert fetcher.stock_daily_calls == [{"code": "000001", "start_date": "2023-01-01", "end_date": "2026-06-22"}]

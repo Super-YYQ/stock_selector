@@ -143,13 +143,16 @@ class DataFetcher:
         self._baostock_logged_in = False
         self._bs = None
 
-    def _query_with_relogin_retry(self, query: Any) -> Any:
-        rs = query(self._login_baostock())
-        if rs.error_code == "0" or not _is_baostock_not_logged_in(rs.error_msg):
-            return rs
-        logger.warning("baostock session expired; relogin and retry once")
-        self.close()
-        return query(self._login_baostock())
+    def _query_with_relogin_retry(self, query: Any, max_attempts: int = 3) -> Any:
+        for attempt in range(1, max_attempts + 1):
+            rs = query(self._login_baostock())
+            if rs.error_code == "0" or not _is_baostock_not_logged_in(rs.error_msg):
+                return rs
+            if attempt == max_attempts:
+                return rs
+            logger.warning("baostock session expired; relogin and retry (%s/%s)", attempt, max_attempts - 1)
+            self.close()
+        return rs
 
     def fetch_stock_basic(self) -> pd.DataFrame:
         rs = self._query_with_relogin_retry(lambda bs: bs.query_stock_basic(code_name="", code=""))

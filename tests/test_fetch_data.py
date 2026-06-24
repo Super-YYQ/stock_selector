@@ -231,7 +231,7 @@ def test_data_fetcher_relogs_and_retries_when_baostock_session_expires(monkeypat
             adjustflag: str,
         ) -> QueryResult:
             self.query_count += 1
-            if self.query_count == 1:
+            if self.query_count < 3:
                 return QueryResult("10002007", "\u7528\u6237\u672a\u767b\u5f55")
             return QueryResult(
                 "0",
@@ -248,6 +248,6 @@ def test_data_fetcher_relogs_and_retries_when_baostock_session_expires(monkeypat
         daily = fetcher.fetch_stock_daily("600000", end_date="2026-06-22")
 
     assert daily["code"].tolist() == ["600000"]
-    assert fake.query_count == 2
-    assert fake.login_count == 2
-    assert fake.logout_count == 2
+    assert fake.query_count == 3
+    assert fake.login_count == 3
+    assert fake.logout_count == 3
