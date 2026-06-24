@@ -198,3 +198,120 @@ def test_init_uses_existing_stock_basic_when_remote_basic_fetch_fails(tmp_path: 
     assert counts["stock_basic"] == 0
     assert db.read_table("stock_daily")["code"].tolist() == ["000001"]
     assert fetcher.stock_daily_calls == [{"code": "000001", "start_date": "2023-01-01", "end_date": "2026-06-22"}]
+
+
+def test_init_resumes_existing_stock_daily_rows(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(data=DataConfig(database=str(tmp_path / "stock.db"), start_date="2023-01-01"))
+    db.upsert_dataframe(
+        "stock_daily",
+        pd.DataFrame(
+            [
+                {
+                    "code": "000001",
+                    "trade_date": "2026-06-20",
+                    "open": 10,
+                    "high": 11,
+                    "low": 9,
+                    "close": 10.5,
+                    "volume": 1000,
+                    "amount": 150000000,
+                    "turnover_rate": 1.2,
+                    "pct_chg": 2.0,
+                    "is_suspended": False,
+                }
+            ]
+        ),
+        ["code", "trade_date"],
+    )
+    fetcher = FakeFetcher()
+
+    update_market_data(db, config, "2026-06-23", init=True, fetcher=fetcher)
+
+    assert fetcher.stock_daily_calls == [{"code": "000001", "start_date": "2026-06-21", "end_date": "2026-06-23"}]
+
+
+def test_init_uses_parallel_stock_daily_fetcher_when_configured(tmp_path: Path, monkeypatch) -> None:
+    import src.run_daily as run_daily_module
+
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(
+        data=DataConfig(
+            database=str(tmp_path / "stock.db"),
+            start_date="2023-01-01",
+            baostock_parallel_workers=2,
+            baostock_parallel_chunk_size=7,
+        )
+    )
+
+    class BasicOnlyFetcher(FakeFetcher):
+        def fetch_stock_basic(self) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "code": "000001",
+                        "name": "Ping An Bank",
+                        "exchange": "sz",
+                        "industry": "Bank",
+                        "list_date": "1991-04-03",
+                        "is_st": 0,
+                        "is_listed": 1,
+                    },
+                    {
+                        "code": "600000",
+                        "name": "PF Bank",
+                        "exchange": "sh",
+                        "industry": "Bank",
+                        "list_date": "1999-11-10",
+                        "is_st": 0,
+                        "is_listed": 1,
+                    },
+                ]
+            )
+
+        def fetch_stock_daily(self, code: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
+            raise AssertionError("parallel init should not use sequential stock daily fetch")
+
+    captured: dict[str, object] = {}
+
+    def fake_parallel_fetch(tasks, workers, chunk_size, query_retries, reconnect_interval):
+        captured["tasks"] = tasks
+        captured["workers"] = workers
+        captured["chunk_size"] = chunk_size
+        captured["query_retries"] = query_retries
+        captured["reconnect_interval"] = reconnect_interval
+        yield (
+            pd.DataFrame(
+                [
+                    {
+                        "code": task[0],
+                        "trade_date": task[2],
+                        "open": 10,
+                        "high": 11,
+                        "low": 9,
+                        "close": 10.5,
+                        "volume": 1000,
+                        "amount": 150000000,
+                        "turnover_rate": 1.2,
+                        "pct_chg": 2.0,
+                        "is_suspended": False,
+                    }
+                    for task in tasks
+                ]
+            ),
+            [],
+            len(tasks),
+        )
+
+    monkeypatch.setattr(run_daily_module, "DataFetcher", lambda *args, **kwargs: BasicOnlyFetcher())
+    monkeypatch.setattr(run_daily_module, "fetch_stock_daily_parallel", fake_parallel_fetch, raising=False)
+
+    counts = run_daily_module.update_market_data(db, config, "2026-06-23", init=True)
+
+    assert counts["stock_daily"] == 2
+    assert captured["workers"] == 2
+    assert captured["chunk_size"] == 7
+    assert captured["tasks"] == [("000001", "2023-01-01", "2026-06-23"), ("600000", "2023-01-01", "2026-06-23")]
+    assert set(db.read_table("stock_daily")["code"]) == {"000001", "600000"}

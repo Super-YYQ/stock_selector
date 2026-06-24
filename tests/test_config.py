@@ -14,6 +14,8 @@ data:
   database: custom/stock.db
   baostock_query_retries: 4
   baostock_reconnect_interval: 150
+  baostock_parallel_workers: 2
+  baostock_parallel_chunk_size: 7
 report:
   top_observe: 20
 features:
@@ -44,6 +46,8 @@ risk:
     assert config.data.provider == "mixed"
     assert config.data.baostock_query_retries == 4
     assert config.data.baostock_reconnect_interval == 150
+    assert config.data.baostock_parallel_workers == 2
+    assert config.data.baostock_parallel_chunk_size == 7
     assert config.report.top_observe == 20
     assert config.report.top_focus == 10
     assert config.features.enable_sector_score is False

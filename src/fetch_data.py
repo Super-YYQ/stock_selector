@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator, Sequence
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -242,3 +244,70 @@ class DataFetcher:
         except Exception as exc:
             logger.warning("AKShare sector fetch failed: %s", exc)
             return pd.DataFrame(columns=["sector_name", "trade_date", "pct_chg", "amount"])
+
+StockDailyTask = tuple[str, str, str]
+StockDailyBatchResult = tuple[pd.DataFrame, list[tuple[str, str]], int]
+
+
+def _chunked_tasks(tasks: Sequence[StockDailyTask], chunk_size: int) -> list[list[StockDailyTask]]:
+    size = max(1, int(chunk_size))
+    return [list(tasks[index : index + size]) for index in range(0, len(tasks), size)]
+
+
+def _fetch_stock_daily_batch_worker(
+    payload: tuple[list[StockDailyTask], int, int],
+) -> tuple[list[dict[str, Any]], list[tuple[str, str]], int]:
+    tasks, query_retries, reconnect_interval = payload
+    rows: list[dict[str, Any]] = []
+    failures: list[tuple[str, str]] = []
+    if not tasks:
+        return rows, failures, 0
+
+    fetcher = DataFetcher(
+        tasks[0][1],
+        query_retries=query_retries,
+        reconnect_interval=reconnect_interval,
+    )
+    try:
+        with fetcher:
+            for code, start_date, end_date in tasks:
+                try:
+                    daily = fetcher.fetch_stock_daily(code, start_date=start_date, end_date=end_date)
+                except Exception as exc:
+                    failures.append((code, str(exc)))
+                    continue
+                if not daily.empty:
+                    rows.extend(daily.to_dict("records"))
+    except Exception as exc:
+        failures.extend((code, str(exc)) for code, _start, _end in tasks)
+
+    return rows, failures, len(tasks)
+
+
+def fetch_stock_daily_parallel(
+    tasks: Sequence[StockDailyTask],
+    workers: int,
+    chunk_size: int,
+    query_retries: int,
+    reconnect_interval: int,
+) -> Iterator[StockDailyBatchResult]:
+    task_list = [(str(code), str(start), str(end)) for code, start, end in tasks]
+    if not task_list:
+        return
+
+    chunks = _chunked_tasks(task_list, chunk_size)
+    max_workers = max(1, min(int(workers), len(chunks)))
+
+    if max_workers == 1:
+        rows, failures, requested = _fetch_stock_daily_batch_worker((task_list, query_retries, reconnect_interval))
+        yield pd.DataFrame(rows), failures, requested
+        return
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_fetch_stock_daily_batch_worker, (chunk, query_retries, reconnect_interval)): chunk
+            for chunk in chunks
+        }
+        for future in as_completed(futures):
+            rows, failures, requested = future.result()
+            yield pd.DataFrame(rows), failures, requested

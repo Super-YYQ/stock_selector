@@ -12,7 +12,7 @@ import pandas as pd
 from src.build_pool import build_stock_pool
 from src.config import AppConfig, load_config
 from src.database import Database
-from src.fetch_data import DataFetcher
+from src.fetch_data import DataFetcher, fetch_stock_daily_parallel
 from src.market_score import calculate_market_score
 from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
@@ -115,6 +115,7 @@ def update_market_data(
     fetcher: Any | None = None,
 ) -> dict[str, int]:
     logger = logging.getLogger(__name__)
+    external_fetcher = fetcher is not None
     fetcher = fetcher or DataFetcher(
         config.data.start_date,
         query_retries=config.data.baostock_query_retries,
@@ -140,8 +141,8 @@ def update_market_data(
                     if not fallback_basic.empty:
                         logger.warning("股票基础信息接口返回空数据，使用本地已有股票列表继续初始化")
                         basic = fallback_basic
-            existing_stock_daily = pd.DataFrame()
-            existing_index_daily = pd.DataFrame()
+            existing_stock_daily = _safe_read(db, "stock_daily", ["code", "trade_date"])
+            existing_index_daily = _safe_read(db, "index_daily", ["index_code", "trade_date"])
         else:
             basic = db.read_table("stock_basic")
             existing_stock_daily = _safe_read(db, "stock_daily", ["code", "trade_date"])
@@ -157,26 +158,59 @@ def update_market_data(
         total = len(codes)
         skipped_symbols = 0
 
-        for position, code in enumerate(codes, start=1):
-            fetch_start = config.data.start_date if init else _next_fetch_start(latest_stock_dates.get(code), config.data.start_date)
+        stock_tasks: list[tuple[str, str, str]] = []
+        for code in codes:
+            fetch_start = _next_fetch_start(latest_stock_dates.get(code), config.data.start_date)
             if not _should_fetch(fetch_start, report_date):
                 skipped_symbols += 1
                 continue
-            if position == 1 or position % 100 == 0 or position == total:
-                logger.info("正在更新个股日线: %s/%s %s (%s -> %s)", position, total, code, fetch_start, report_date)
+            stock_tasks.append((code, fetch_start, report_date))
+
+        use_parallel_stock_fetch = bool(stock_tasks) and not external_fetcher and config.data.baostock_parallel_workers > 1
+        if use_parallel_stock_fetch:
+            logger.info(
+                "parallel stock daily update: %s/%s symbols, workers=%s, chunk_size=%s",
+                len(stock_tasks),
+                total,
+                config.data.baostock_parallel_workers,
+                config.data.baostock_parallel_chunk_size,
+            )
+            processed_symbols = 0
             try:
-                daily = active_fetcher.fetch_stock_daily(code, start_date=fetch_start, end_date=report_date)
-                if not daily.empty:
-                    counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+                for daily, failures, requested in fetch_stock_daily_parallel(
+                    stock_tasks,
+                    workers=config.data.baostock_parallel_workers,
+                    chunk_size=config.data.baostock_parallel_chunk_size,
+                    query_retries=config.data.baostock_query_retries,
+                    reconnect_interval=config.data.baostock_reconnect_interval,
+                ):
+                    processed_symbols += requested
+                    for code, error in failures:
+                        counts["failed_symbols"] += 1
+                        logger.warning("[%s] stock daily update failed: %s", code, error)
+                    if not daily.empty:
+                        counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+                    logger.info("parallel stock daily progress: %s/%s symbols", processed_symbols, len(stock_tasks))
             except Exception as exc:
-                counts["failed_symbols"] += 1
-                logger.warning("[%s] 日线数据更新失败: %s", code, exc)
+                logger.warning("parallel stock daily update failed, fallback to sequential mode: %s", exc)
+                use_parallel_stock_fetch = False
+
+        if not use_parallel_stock_fetch:
+            for position, (code, fetch_start, fetch_end) in enumerate(stock_tasks, start=1):
+                if position == 1 or position % 100 == 0 or position == len(stock_tasks):
+                    logger.info("stock daily update: %s/%s %s (%s -> %s)", position, len(stock_tasks), code, fetch_start, fetch_end)
+                try:
+                    daily = active_fetcher.fetch_stock_daily(code, start_date=fetch_start, end_date=fetch_end)
+                    if not daily.empty:
+                        counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+                except Exception as exc:
+                    counts["failed_symbols"] += 1
+                    logger.warning("[%s] stock daily update failed: %s", code, exc)
 
         if skipped_symbols:
-            logger.info("已跳过 %s 只本地数据已更新到 %s 的股票", skipped_symbols, report_date)
-
+            logger.info("skipped %s symbols already updated to %s", skipped_symbols, report_date)
         for index_code in INDEX_CODES:
-            fetch_start = config.data.start_date if init else _next_fetch_start(latest_index_dates.get(index_code), config.data.start_date)
+            fetch_start = _next_fetch_start(latest_index_dates.get(index_code), config.data.start_date)
             if not _should_fetch(fetch_start, report_date):
                 logger.info("指数日线已是最新，跳过: %s", index_code)
                 continue

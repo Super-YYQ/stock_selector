@@ -4,6 +4,8 @@ data:
   start_date: "2023-01-01"
   baostock_query_retries: 3
   baostock_reconnect_interval: 200
+  baostock_parallel_workers: 8
+  baostock_parallel_chunk_size: 20
 
 report:
   top_observe: 50
