@@ -23,7 +23,7 @@ class DataConfig:
     start_date: str = "2023-01-01"
     baostock_query_retries: int = 3
     baostock_reconnect_interval: int = 200
-    baostock_parallel_workers: int = 8
+    baostock_parallel_workers: int = 2
     baostock_parallel_chunk_size: int = 20
 
 

@@ -70,3 +70,9 @@ def test_load_config_rejects_invalid_threshold(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="min_price"):
         load_config(config_dir)
+
+
+def test_data_config_defaults_use_conservative_parallelism() -> None:
+    config = AppConfig()
+
+    assert config.data.baostock_parallel_workers == 2

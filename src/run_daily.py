@@ -107,6 +107,11 @@ def _should_fetch(start_date: str, end_date: str) -> bool:
     return start_date <= end_date
 
 
+def _is_baostock_rate_limit_error(error: object) -> bool:
+    message = str(error).lower()
+    return "blacklist" in message or "rate limit" in message or "\u9ed1\u540d\u5355" in str(error)
+
+
 def update_market_data(
     db: Database,
     config: AppConfig,
@@ -166,6 +171,23 @@ def update_market_data(
                 continue
             stock_tasks.append((code, fetch_start, report_date))
 
+        def retry_stock_tasks_sequentially(tasks: list[tuple[str, str, str]], reason: str) -> None:
+            if not tasks:
+                return
+            if hasattr(active_fetcher, "close"):
+                active_fetcher.close()
+            logger.info("retrying %s stock daily tasks sequentially after %s", len(tasks), reason)
+            for position, (code, fetch_start, fetch_end) in enumerate(tasks, start=1):
+                if position == 1 or position % 100 == 0 or position == len(tasks):
+                    logger.info("stock daily retry: %s/%s %s (%s -> %s)", position, len(tasks), code, fetch_start, fetch_end)
+                try:
+                    daily = active_fetcher.fetch_stock_daily(code, start_date=fetch_start, end_date=fetch_end)
+                    if not daily.empty:
+                        counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+                except Exception as exc:
+                    counts["failed_symbols"] += 1
+                    logger.warning("[%s] stock daily update failed after retry: %s", code, exc)
+
         use_parallel_stock_fetch = bool(stock_tasks) and not external_fetcher and config.data.baostock_parallel_workers > 1
         if use_parallel_stock_fetch:
             logger.info(
@@ -175,6 +197,8 @@ def update_market_data(
                 config.data.baostock_parallel_workers,
                 config.data.baostock_parallel_chunk_size,
             )
+            task_by_code = {task[0]: task for task in stock_tasks}
+            retry_tasks: dict[str, tuple[str, str, str]] = {}
             processed_symbols = 0
             try:
                 for daily, failures, requested in fetch_stock_daily_parallel(
@@ -186,26 +210,27 @@ def update_market_data(
                 ):
                     processed_symbols += requested
                     for code, error in failures:
-                        counts["failed_symbols"] += 1
-                        logger.warning("[%s] stock daily update failed: %s", code, error)
+                        task = task_by_code.get(code)
+                        if _is_baostock_rate_limit_error(error):
+                            counts["failed_symbols"] += 1
+                            logger.warning("[%s] stock daily blocked by baostock rate limit; stop immediate retry: %s", code, error)
+                        elif task is not None:
+                            retry_tasks[code] = task
+                            logger.warning("[%s] stock daily parallel fetch failed; will retry sequentially: %s", code, error)
+                        else:
+                            counts["failed_symbols"] += 1
+                            logger.warning("[%s] stock daily update failed: %s", code, error)
                     if not daily.empty:
                         counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
                     logger.info("parallel stock daily progress: %s/%s symbols", processed_symbols, len(stock_tasks))
             except Exception as exc:
                 logger.warning("parallel stock daily update failed, fallback to sequential mode: %s", exc)
                 use_parallel_stock_fetch = False
+            else:
+                retry_stock_tasks_sequentially(list(retry_tasks.values()), "parallel failures")
 
         if not use_parallel_stock_fetch:
-            for position, (code, fetch_start, fetch_end) in enumerate(stock_tasks, start=1):
-                if position == 1 or position % 100 == 0 or position == len(stock_tasks):
-                    logger.info("stock daily update: %s/%s %s (%s -> %s)", position, len(stock_tasks), code, fetch_start, fetch_end)
-                try:
-                    daily = active_fetcher.fetch_stock_daily(code, start_date=fetch_start, end_date=fetch_end)
-                    if not daily.empty:
-                        counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
-                except Exception as exc:
-                    counts["failed_symbols"] += 1
-                    logger.warning("[%s] stock daily update failed: %s", code, exc)
+            retry_stock_tasks_sequentially(stock_tasks, "sequential mode")
 
         if skipped_symbols:
             logger.info("skipped %s symbols already updated to %s", skipped_symbols, report_date)

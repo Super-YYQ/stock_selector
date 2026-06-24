@@ -113,11 +113,13 @@ data:
   start_date: "2023-01-01"
   baostock_query_retries: 3
   baostock_reconnect_interval: 200
-  baostock_parallel_workers: 8
+  baostock_parallel_workers: 2
   baostock_parallel_chunk_size: 20
 ```
 
 `baostock_query_retries` controls retry count for baostock session-expired / not-logged-in errors. `baostock_reconnect_interval` controls proactive reconnect after N baostock queries. `baostock_parallel_workers` and `baostock_parallel_chunk_size` control the parallel stock daily backfill used by `--init` and normal updates. Interrupted init runs are resumable from local `stock_daily` dates.
+
+If baostock prints blacklist/rate-limit messages, stop the run, wait for the service to recover, and keep `baostock_parallel_workers` at `1` or `2` before retrying.
 
 也就是说，首次执行：
 

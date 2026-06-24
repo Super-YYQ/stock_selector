@@ -315,3 +315,155 @@ def test_init_uses_parallel_stock_daily_fetcher_when_configured(tmp_path: Path, 
     assert captured["chunk_size"] == 7
     assert captured["tasks"] == [("000001", "2023-01-01", "2026-06-23"), ("600000", "2023-01-01", "2026-06-23")]
     assert set(db.read_table("stock_daily")["code"]) == {"000001", "600000"}
+
+
+def test_parallel_stock_daily_failures_are_retried_sequentially(tmp_path: Path, monkeypatch) -> None:
+    import src.run_daily as run_daily_module
+
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(
+        data=DataConfig(
+            database=str(tmp_path / "stock.db"),
+            start_date="2023-01-01",
+            baostock_parallel_workers=2,
+            baostock_parallel_chunk_size=7,
+        )
+    )
+
+    class RetryFetcher(FakeFetcher):
+        def fetch_stock_basic(self) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "code": "000001",
+                        "name": "Ping An Bank",
+                        "exchange": "sz",
+                        "industry": "Bank",
+                        "list_date": "1991-04-03",
+                        "is_st": 0,
+                        "is_listed": 1,
+                    },
+                    {
+                        "code": "600000",
+                        "name": "PF Bank",
+                        "exchange": "sh",
+                        "industry": "Bank",
+                        "list_date": "1999-11-10",
+                        "is_st": 0,
+                        "is_listed": 1,
+                    },
+                ]
+            )
+
+    def fake_parallel_fetch(tasks, workers, chunk_size, query_retries, reconnect_interval):
+        yield (
+            pd.DataFrame(
+                [
+                    {
+                        "code": "000001",
+                        "trade_date": "2026-06-23",
+                        "open": 10,
+                        "high": 11,
+                        "low": 9,
+                        "close": 10.5,
+                        "volume": 1000,
+                        "amount": 150000000,
+                        "turnover_rate": 1.2,
+                        "pct_chg": 2.0,
+                        "is_suspended": False,
+                    }
+                ]
+            ),
+            [("600000", "baostock login failed: network receive error")],
+            len(tasks),
+        )
+
+    created: dict[str, RetryFetcher] = {}
+
+    def make_fetcher(*args, **kwargs):
+        created["fetcher"] = RetryFetcher()
+        return created["fetcher"]
+
+    monkeypatch.setattr(run_daily_module, "DataFetcher", make_fetcher)
+    monkeypatch.setattr(run_daily_module, "fetch_stock_daily_parallel", fake_parallel_fetch, raising=False)
+
+    counts = run_daily_module.update_market_data(db, config, "2026-06-23", init=True)
+
+    assert counts["failed_symbols"] == 0
+    assert created["fetcher"].stock_daily_calls == [{"code": "600000", "start_date": "2023-01-01", "end_date": "2026-06-23"}]
+    assert set(db.read_table("stock_daily")["code"]) == {"000001", "600000"}
+
+
+def test_parallel_stock_daily_blacklist_failures_are_not_retried_immediately(tmp_path: Path, monkeypatch) -> None:
+    import src.run_daily as run_daily_module
+
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(
+        data=DataConfig(
+            database=str(tmp_path / "stock.db"),
+            start_date="2023-01-01",
+            baostock_parallel_workers=2,
+            baostock_parallel_chunk_size=7,
+        )
+    )
+
+    class NoRetryFetcher(FakeFetcher):
+        def fetch_stock_basic(self) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "code": "000001",
+                        "name": "Ping An Bank",
+                        "exchange": "sz",
+                        "industry": "Bank",
+                        "list_date": "1991-04-03",
+                        "is_st": 0,
+                        "is_listed": 1,
+                    },
+                    {
+                        "code": "600000",
+                        "name": "PF Bank",
+                        "exchange": "sh",
+                        "industry": "Bank",
+                        "list_date": "1999-11-10",
+                        "is_st": 0,
+                        "is_listed": 1,
+                    },
+                ]
+            )
+
+        def fetch_stock_daily(self, code: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
+            raise AssertionError("blacklist failures should not be retried immediately")
+
+    def fake_parallel_fetch(tasks, workers, chunk_size, query_retries, reconnect_interval):
+        yield (
+            pd.DataFrame(
+                [
+                    {
+                        "code": "000001",
+                        "trade_date": "2026-06-23",
+                        "open": 10,
+                        "high": 11,
+                        "low": 9,
+                        "close": 10.5,
+                        "volume": 1000,
+                        "amount": 150000000,
+                        "turnover_rate": 1.2,
+                        "pct_chg": 2.0,
+                        "is_suspended": False,
+                    }
+                ]
+            ),
+            [("600000", "blacklist user, contact administrator")],
+            len(tasks),
+        )
+
+    monkeypatch.setattr(run_daily_module, "DataFetcher", lambda *args, **kwargs: NoRetryFetcher())
+    monkeypatch.setattr(run_daily_module, "fetch_stock_daily_parallel", fake_parallel_fetch, raising=False)
+
+    counts = run_daily_module.update_market_data(db, config, "2026-06-23", init=True)
+
+    assert counts["failed_symbols"] == 1
+    assert db.read_table("stock_daily")["code"].tolist() == ["000001"]
