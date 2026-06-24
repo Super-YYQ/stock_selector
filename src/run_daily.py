@@ -115,7 +115,11 @@ def update_market_data(
     fetcher: Any | None = None,
 ) -> dict[str, int]:
     logger = logging.getLogger(__name__)
-    fetcher = fetcher or DataFetcher(config.data.start_date)
+    fetcher = fetcher or DataFetcher(
+        config.data.start_date,
+        query_retries=config.data.baostock_query_retries,
+        reconnect_interval=config.data.baostock_reconnect_interval,
+    )
     counts = {"stock_basic": 0, "stock_daily": 0, "index_daily": 0, "sector_daily": 0, "failed_symbols": 0}
 
     with _managed_fetcher(fetcher) as active_fetcher:

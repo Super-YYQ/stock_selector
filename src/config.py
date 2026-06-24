@@ -21,6 +21,8 @@ class DataConfig:
     provider: str = "mixed"
     database: str = "data/stock.db"
     start_date: str = "2023-01-01"
+    baostock_query_retries: int = 3
+    baostock_reconnect_interval: int = 200
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,10 @@ def _section(raw: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def _validate(config: AppConfig) -> None:
+    if config.data.baostock_query_retries < 1:
+        raise ValueError("baostock_query_retries must be greater than 0")
+    if config.data.baostock_reconnect_interval < 1:
+        raise ValueError("baostock_reconnect_interval must be greater than 0")
     if config.stock_pool.min_price <= 0:
         raise ValueError("min_price must be greater than 0")
     if config.stock_pool.min_list_days < 1:

@@ -111,7 +111,11 @@ data/stock.db
 ```yaml
 data:
   start_date: "2023-01-01"
+  baostock_query_retries: 3
+  baostock_reconnect_interval: 200
 ```
+
+`baostock_query_retries` controls retry count for baostock session-expired / not-logged-in errors; `baostock_reconnect_interval` controls proactive reconnect after N baostock queries, following the stability pattern observed in Sequoia-X.
 
 也就是说，首次执行：
 

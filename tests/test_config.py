@@ -12,6 +12,8 @@ def test_load_config_merges_yaml_with_defaults(tmp_path: Path) -> None:
         """
 data:
   database: custom/stock.db
+  baostock_query_retries: 4
+  baostock_reconnect_interval: 150
 report:
   top_observe: 20
 features:
@@ -40,6 +42,8 @@ risk:
     assert isinstance(config, AppConfig)
     assert config.data.database == "custom/stock.db"
     assert config.data.provider == "mixed"
+    assert config.data.baostock_query_retries == 4
+    assert config.data.baostock_reconnect_interval == 150
     assert config.report.top_observe == 20
     assert config.report.top_focus == 10
     assert config.features.enable_sector_score is False

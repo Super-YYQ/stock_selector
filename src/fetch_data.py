@@ -114,8 +114,11 @@ def _is_baostock_not_logged_in(error_msg: str) -> bool:
 @dataclass
 class DataFetcher:
     start_date: str
+    query_retries: int = 3
+    reconnect_interval: int = 200
     _bs: Any = field(default=None, init=False, repr=False)
     _baostock_logged_in: bool = field(default=False, init=False, repr=False)
+    _queries_since_login: int = field(default=0, init=False, repr=False)
 
     def __enter__(self) -> DataFetcher:
         self._login_baostock()
@@ -135,6 +138,7 @@ class DataFetcher:
             raise RuntimeError(f"baostock login failed: {login.error_msg}")
         self._bs = bs
         self._baostock_logged_in = True
+        self._queries_since_login = 0
         return bs
 
     def close(self) -> None:
@@ -142,15 +146,26 @@ class DataFetcher:
             self._bs.logout()
         self._baostock_logged_in = False
         self._bs = None
+        self._queries_since_login = 0
 
-    def _query_with_relogin_retry(self, query: Any, max_attempts: int = 3) -> Any:
-        for attempt in range(1, max_attempts + 1):
+    def _reconnect_baostock_if_needed(self) -> None:
+        if self.reconnect_interval < 1:
+            return
+        if self._baostock_logged_in and self._bs is not None and self._queries_since_login >= self.reconnect_interval:
+            logger.info("baostock session reached %s queries; reconnecting", self.reconnect_interval)
+            self.close()
+
+    def _query_with_relogin_retry(self, query: Any, max_attempts: int | None = None) -> Any:
+        attempts = max(1, max_attempts or self.query_retries)
+        for attempt in range(1, attempts + 1):
+            self._reconnect_baostock_if_needed()
             rs = query(self._login_baostock())
+            self._queries_since_login += 1
             if rs.error_code == "0" or not _is_baostock_not_logged_in(rs.error_msg):
                 return rs
-            if attempt == max_attempts:
+            if attempt == attempts:
                 return rs
-            logger.warning("baostock session expired; relogin and retry (%s/%s)", attempt, max_attempts - 1)
+            logger.warning("baostock session expired; relogin and retry (%s/%s)", attempt, attempts - 1)
             self.close()
         return rs
 

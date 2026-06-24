@@ -251,3 +251,59 @@ def test_data_fetcher_relogs_and_retries_when_baostock_session_expires(monkeypat
     assert fake.query_count == 3
     assert fake.login_count == 3
     assert fake.logout_count == 3
+
+
+def test_data_fetcher_reconnects_after_configured_query_interval(monkeypatch) -> None:
+    import sys
+
+    from src.fetch_data import DataFetcher
+
+    class LoginResult:
+        error_code = "0"
+        error_msg = ""
+
+    class QueryResult:
+        error_code = "0"
+        error_msg = ""
+        fields = ["code", "code_name", "ipoDate", "type", "status"]
+
+        def __init__(self) -> None:
+            self._rows = [["sh.600000", "PF Bank", "1999-11-10", "1", "1"]]
+            self._index = -1
+
+        def next(self) -> bool:
+            self._index += 1
+            return self._index < len(self._rows)
+
+        def get_row_data(self) -> list[str]:
+            return self._rows[self._index]
+
+    class FakeBaostock:
+        def __init__(self) -> None:
+            self.login_count = 0
+            self.logout_count = 0
+            self.query_count = 0
+
+        def login(self) -> LoginResult:
+            self.login_count += 1
+            return LoginResult()
+
+        def logout(self) -> None:
+            self.logout_count += 1
+
+        def query_stock_basic(self, code_name: str, code: str) -> QueryResult:
+            self.query_count += 1
+            return QueryResult()
+
+    fake = FakeBaostock()
+    monkeypatch.setitem(sys.modules, "baostock", fake)
+
+    fetcher = DataFetcher("2026-01-01", reconnect_interval=2)
+    with fetcher:
+        fetcher.fetch_stock_basic()
+        fetcher.fetch_stock_basic()
+        fetcher.fetch_stock_basic()
+
+    assert fake.query_count == 3
+    assert fake.login_count == 2
+    assert fake.logout_count == 2

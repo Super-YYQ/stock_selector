@@ -262,3 +262,9 @@ python -m pytest -v
 - `python run_daily.py`：读取本地 SQLite 已有的最新交易日，按股票和指数做增量更新。
 - 本地数据主要在 `data/stock.db`，默认不提交。
 - 修改数据拉取范围时，优先调整 `config/strategy.yml` 的 `data.start_date`，并同步更新 README。
+
+## Sequoia-X Data Fetching Notes
+
+- Sequoia-X still uses baostock for its data layer; baostock requires `bs.login()` before queries. This is a free API session, not a user account login.
+- Its stability pattern is retry single-symbol failures, skip repeated failures, and periodically logout/login during long backfills.
+- This repo mirrors that pattern with `data.baostock_query_retries` and `data.baostock_reconnect_interval`. Defaults: 3 retries and reconnect after 200 baostock queries.
