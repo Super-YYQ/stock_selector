@@ -34,3 +34,30 @@ def test_build_stock_pool_filters_expected_reasons() -> None:
     assert "ST" in filtered[filtered["code"] == "000002"].iloc[0]["filter_reason"]
     assert "上市不足" in filtered[filtered["code"] == "000003"].iloc[0]["filter_reason"]
     assert "价格低于" in filtered[filtered["code"] == "000004"].iloc[0]["filter_reason"]
+
+
+def test_build_stock_pool_uses_earliest_daily_date_when_list_date_missing() -> None:
+    basic = pd.DataFrame(
+        [
+            {"code": "000001", "name": "Old Co", "industry": "Bank", "list_date": "", "is_st": 0, "is_listed": 1},
+            {"code": "000002", "name": "New Co", "industry": "Tech", "list_date": "", "is_st": 0, "is_listed": 1},
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {"code": "000001", "trade_date": "2023-01-01", "close": 10, "amount": 200000000, "is_suspended": 0, "pct_chg": 1},
+            {"code": "000001", "trade_date": "2026-06-22", "close": 11, "amount": 200000000, "is_suspended": 0, "pct_chg": 1},
+            {"code": "000002", "trade_date": "2026-06-01", "close": 10, "amount": 200000000, "is_suspended": 0, "pct_chg": 1},
+            {"code": "000002", "trade_date": "2026-06-22", "close": 11, "amount": 200000000, "is_suspended": 0, "pct_chg": 1},
+        ]
+    )
+
+    eligible, filtered = build_stock_pool(
+        basic,
+        daily,
+        "2026-06-22",
+        StockPoolConfig(min_avg_amount_20d=0),
+    )
+
+    assert eligible["code"].tolist() == ["000001"]
+    assert filtered["code"].tolist() == ["000002"]

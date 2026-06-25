@@ -268,3 +268,5 @@ python -m pytest -v
 - Sequoia-X still uses baostock for its data layer; baostock requires `bs.login()` before queries. This is a free API session, not a user account login.
 - Its stability pattern is retry single-symbol failures, skip repeated failures, and periodically logout/login during long backfills.
 - This repo mirrors that pattern with `data.baostock_query_retries` and `data.baostock_reconnect_interval`. Defaults: 3 retries, reconnect after 200 baostock queries, 2 parallel workers, and 20 symbols per worker batch. Init runs resume from local `stock_daily` max dates unless the user deletes `data/stock.db` for a clean rebuild.
+- `data.provider: mixed` means baostock is tried first, but baostock blacklist/rate-limit login failures fall back to `AkshareDataFetcher`. `data.provider: akshare` skips baostock entirely. AKShare stock daily updates intentionally run sequentially through the existing update loop.
+- AKShare stock basic data does not reliably include IPO/list dates, so `build_stock_pool` falls back to the earliest local daily row when enforcing `stock_pool.min_list_days`.

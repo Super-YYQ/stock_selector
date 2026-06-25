@@ -87,13 +87,124 @@ def normalize_baostock_index_daily(raw: pd.DataFrame, index_code: str) -> pd.Dat
     return df.dropna(subset=["close"]).reset_index(drop=True)
 
 
+AKSHARE_STOCK_DAILY_COLUMNS = {
+    "\u65e5\u671f": "trade_date",
+    "\u5f00\u76d8": "open",
+    "\u6700\u9ad8": "high",
+    "\u6700\u4f4e": "low",
+    "\u6536\u76d8": "close",
+    "\u6210\u4ea4\u91cf": "volume",
+    "\u6210\u4ea4\u989d": "amount",
+    "\u6362\u624b\u7387": "turnover_rate",
+    "\u6da8\u8dcc\u5e45": "pct_chg",
+}
+
+AKSHARE_INDEX_COLUMNS = {
+    "date": "trade_date",
+    "\u65e5\u671f": "trade_date",
+    "open": "open",
+    "\u5f00\u76d8": "open",
+    "high": "high",
+    "\u6700\u9ad8": "high",
+    "low": "low",
+    "\u6700\u4f4e": "low",
+    "close": "close",
+    "\u6536\u76d8": "close",
+    "volume": "volume",
+    "\u6210\u4ea4\u91cf": "volume",
+    "amount": "amount",
+    "\u6210\u4ea4\u989d": "amount",
+    "pct_chg": "pct_chg",
+    "\u6da8\u8dcc\u5e45": "pct_chg",
+}
+
+
+def _format_trade_date(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, errors="coerce").dt.strftime("%Y-%m-%d")
+
+
+def _compact_date(value: str) -> str:
+    return str(value).replace("-", "")
+
+
+def normalize_akshare_stock_basic(raw: pd.DataFrame) -> pd.DataFrame:
+    column_map = {
+        "\u8bc1\u5238\u4ee3\u7801": "code",
+        "\u8bc1\u5238\u7b80\u79f0": "name",
+        "A\u80a1\u4ee3\u7801": "code",
+        "A\u80a1\u7b80\u79f0": "name",
+    }
+    renamed = raw.rename(columns={key: value for key, value in column_map.items() if key in raw.columns})
+    required = {"code", "name"}
+    missing = required - set(renamed.columns)
+    if missing:
+        raise ValueError(f"akshare stock basic missing columns: {sorted(missing)}")
+
+    df = renamed[["code", "name"]].copy()
+    df["code"] = df["code"].astype(str).str.extract(r"(\d+)", expand=False).fillna("").str.zfill(6)
+    df = df[df["code"].str.len().eq(6)].copy()
+    df["name"] = df["name"].astype(str)
+    df["exchange"] = df["code"].map(_exchange)
+    df["industry"] = ""
+    df["list_date"] = ""
+    df["is_st"] = df["name"].str.contains("ST", case=False, na=False).astype(int)
+    df["is_listed"] = 1
+    return df[["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"]].reset_index(drop=True)
+
+
+def normalize_akshare_stock_daily(raw: pd.DataFrame, code: str) -> pd.DataFrame:
+    renamed = raw.rename(columns={key: value for key, value in AKSHARE_STOCK_DAILY_COLUMNS.items() if key in raw.columns})
+    if "code" not in renamed.columns:
+        if "\u80a1\u7968\u4ee3\u7801" in raw.columns:
+            renamed["code"] = raw["\u80a1\u7968\u4ee3\u7801"]
+        else:
+            renamed["code"] = code
+    required = {"trade_date", "open", "high", "low", "close", "volume", "amount", "turnover_rate", "pct_chg", "code"}
+    missing = required - set(renamed.columns)
+    if missing:
+        raise ValueError(f"akshare stock daily missing columns: {sorted(missing)}")
+
+    df = renamed[["code", "trade_date", "open", "high", "low", "close", "volume", "amount", "turnover_rate", "pct_chg"]].copy()
+    df["code"] = df["code"].astype(str).str.extract(r"(\d+)", expand=False).fillna(code).str.zfill(6)
+    df["trade_date"] = _format_trade_date(df["trade_date"])
+    for column in ["open", "high", "low", "close", "volume", "amount", "turnover_rate", "pct_chg"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df["is_suspended"] = df["volume"].fillna(0).le(0)
+    return df.dropna(subset=["trade_date", "close"]).reset_index(drop=True)
+
+
+def normalize_akshare_index_daily(raw: pd.DataFrame, index_code: str) -> pd.DataFrame:
+    renamed = raw.rename(columns={key: value for key, value in AKSHARE_INDEX_COLUMNS.items() if key in raw.columns})
+    required = {"trade_date", "open", "high", "low", "close", "volume", "amount"}
+    missing = required - set(renamed.columns)
+    if missing:
+        raise ValueError(f"akshare index daily missing columns: {sorted(missing)}")
+
+    columns = ["trade_date", "open", "high", "low", "close", "volume", "amount"]
+    if "pct_chg" in renamed.columns:
+        columns.append("pct_chg")
+    df = renamed[columns].copy()
+    df.insert(0, "index_code", index_code)
+    df["trade_date"] = _format_trade_date(df["trade_date"])
+    for column in ["open", "high", "low", "close", "volume", "amount"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    if "pct_chg" in df.columns:
+        df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
+    else:
+        df["pct_chg"] = df["close"].pct_change().mul(100)
+    df["pct_chg"] = df["pct_chg"].fillna(0)
+    return df[["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]].dropna(
+        subset=["trade_date", "close"]
+    ).reset_index(drop=True)
+
+
 def normalize_akshare_sector(raw: pd.DataFrame, trade_date: str) -> pd.DataFrame:
     column_map = {
-        "板块名称": "sector_name",
-        "名称": "sector_name",
-        "涨跌幅": "pct_chg",
-        "涨跌幅%": "pct_chg",
-        "成交额": "amount",
+        "\u677f\u5757\u540d\u79f0": "sector_name",
+        "\u540d\u79f0": "sector_name",
+        "\u6da8\u8dcc\u5e45": "pct_chg",
+        "\u6da8\u8dcc\u5e45%": "pct_chg",
+        "\u6210\u4ea4\u989d": "amount",
     }
     renamed = raw.rename(columns={key: value for key, value in column_map.items() if key in raw.columns})
     required = {"sector_name", "pct_chg", "amount"}
@@ -234,6 +345,62 @@ class DataFetcher:
             rows.append(rs.get_row_data())
         raw = pd.DataFrame(rows, columns=rs.fields)
         return normalize_baostock_index_daily(raw, index_code) if not raw.empty else pd.DataFrame()
+
+    def fetch_sector_daily(self, trade_date: str) -> pd.DataFrame:
+        try:
+            import akshare as ak
+
+            raw = ak.stock_board_industry_name_em()
+            return normalize_akshare_sector(raw, trade_date)
+        except Exception as exc:
+            logger.warning("AKShare sector fetch failed: %s", exc)
+            return pd.DataFrame(columns=["sector_name", "trade_date", "pct_chg", "amount"])
+
+
+@dataclass
+class AkshareDataFetcher:
+    start_date: str
+
+    def __enter__(self) -> "AkshareDataFetcher":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        return None
+
+    def fetch_stock_basic(self) -> pd.DataFrame:
+        import akshare as ak
+
+        raw = ak.stock_info_a_code_name()
+        return normalize_akshare_stock_basic(raw) if not raw.empty else pd.DataFrame()
+
+    def fetch_stock_daily(
+        self,
+        code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        import akshare as ak
+
+        start = _compact_date(start_date or self.start_date)
+        end = _compact_date(end_date or date.today().strftime("%Y-%m-%d"))
+        raw = ak.stock_zh_a_hist(symbol=str(code).zfill(6), period="daily", start_date=start, end_date=end, adjust="hfq")
+        return normalize_akshare_stock_daily(raw, str(code).zfill(6)) if not raw.empty else pd.DataFrame()
+
+    def fetch_index_daily(
+        self,
+        index_code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        import akshare as ak
+
+        start = _compact_date(start_date or self.start_date)
+        end = _compact_date(end_date or date.today().strftime("%Y-%m-%d"))
+        raw = ak.stock_zh_index_daily_em(symbol=index_code, start_date=start, end_date=end)
+        return normalize_akshare_index_daily(raw, index_code) if not raw.empty else pd.DataFrame()
 
     def fetch_sector_daily(self, trade_date: str) -> pd.DataFrame:
         try:

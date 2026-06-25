@@ -1,6 +1,9 @@
 import pandas as pd
 
 from src.fetch_data import (
+    normalize_akshare_index_daily,
+    normalize_akshare_stock_basic,
+    normalize_akshare_stock_daily,
     normalize_akshare_sector,
     normalize_baostock_daily,
     normalize_baostock_index_daily,
@@ -59,6 +62,91 @@ def test_normalize_akshare_sector_supports_chinese_columns() -> None:
     assert normalized.loc[0, "sector_name"] == "机器人"
     assert normalized.loc[0, "trade_date"] == "2026-06-22"
 
+
+
+def test_normalize_akshare_stock_daily_renames_and_converts_numbers() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "\u65e5\u671f": "2026-06-22",
+                "\u80a1\u7968\u4ee3\u7801": "000001",
+                "\u5f00\u76d8": "10.0",
+                "\u6536\u76d8": "10.8",
+                "\u6700\u9ad8": "11.0",
+                "\u6700\u4f4e": "9.9",
+                "\u6210\u4ea4\u91cf": "1000",
+                "\u6210\u4ea4\u989d": "108000",
+                "\u6da8\u8dcc\u5e45": "2.86",
+                "\u6362\u624b\u7387": "1.2",
+            }
+        ]
+    )
+
+    normalized = normalize_akshare_stock_daily(raw, "000001")
+
+    assert normalized.to_dict("records") == [
+        {
+            "code": "000001",
+            "trade_date": "2026-06-22",
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.9,
+            "close": 10.8,
+            "volume": 1000,
+            "amount": 108000,
+            "turnover_rate": 1.2,
+            "pct_chg": 2.86,
+            "is_suspended": False,
+        }
+    ]
+
+
+def test_normalize_akshare_stock_basic_outputs_core_columns() -> None:
+    raw = pd.DataFrame(
+        [
+            {"code": "1", "name": "Ping An Bank"},
+            {"code": "600000", "name": "PF Bank"},
+        ]
+    )
+
+    normalized = normalize_akshare_stock_basic(raw)
+
+    assert normalized.to_dict("records") == [
+        {
+            "code": "000001",
+            "name": "Ping An Bank",
+            "exchange": "sz",
+            "industry": "",
+            "list_date": "",
+            "is_st": 0,
+            "is_listed": 1,
+        },
+        {
+            "code": "600000",
+            "name": "PF Bank",
+            "exchange": "sh",
+            "industry": "",
+            "list_date": "",
+            "is_st": 0,
+            "is_listed": 1,
+        },
+    ]
+
+
+def test_normalize_akshare_index_daily_calculates_pct_chg_when_missing() -> None:
+    raw = pd.DataFrame(
+        [
+            {"date": "2026-06-21", "open": "3000", "close": "3010", "high": "3020", "low": "2990", "volume": "100", "amount": "200"},
+            {"date": "2026-06-22", "open": "3010", "close": "3040", "high": "3050", "low": "3000", "volume": "120", "amount": "240"},
+        ]
+    )
+
+    normalized = normalize_akshare_index_daily(raw, "sh000001")
+
+    assert normalized.loc[0, "index_code"] == "sh000001"
+    assert normalized.loc[0, "trade_date"] == "2026-06-21"
+    assert normalized.loc[0, "pct_chg"] == 0
+    assert round(normalized.loc[1, "pct_chg"], 4) == round((3040 / 3010 - 1) * 100, 4)
 
 def test_normalize_baostock_stock_basic_outputs_core_columns() -> None:
     raw = pd.DataFrame(

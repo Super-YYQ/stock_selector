@@ -95,6 +95,32 @@ def test_update_market_data_writes_fetched_tables(tmp_path: Path) -> None:
     assert fetcher.stock_daily_calls[0]["start_date"] == config.data.start_date
 
 
+
+def test_init_falls_back_to_akshare_when_baostock_login_is_blacklisted(tmp_path: Path, monkeypatch) -> None:
+    import src.run_daily as run_daily_module
+
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(data=DataConfig(database=str(tmp_path / "stock.db"), baostock_parallel_workers=1))
+
+    class BlacklistedBaostockFetcher:
+        def __enter__(self):
+            raise RuntimeError("baostock login failed: blacklist user")
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+    fallback = FakeFetcher()
+
+    monkeypatch.setattr(run_daily_module, "DataFetcher", lambda *args, **kwargs: BlacklistedBaostockFetcher())
+    monkeypatch.setattr(run_daily_module, "AkshareDataFetcher", lambda *args, **kwargs: fallback, raising=False)
+
+    counts = run_daily_module.update_market_data(db, config, "2026-06-22", init=True)
+
+    assert counts["stock_basic"] == 1
+    assert db.read_table("stock_daily")["code"].tolist() == ["000001"]
+    assert fallback.stock_daily_calls == [{"code": "000001", "start_date": config.data.start_date, "end_date": "2026-06-22"}]
+
 def test_update_market_data_fetches_incrementally_after_existing_daily_rows(tmp_path: Path) -> None:
     db = Database(tmp_path / "stock.db")
     db.initialize()

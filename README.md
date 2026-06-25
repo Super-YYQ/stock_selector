@@ -110,6 +110,7 @@ data/stock.db
 
 ```yaml
 data:
+  provider: mixed
   start_date: "2023-01-01"
   baostock_query_retries: 3
   baostock_reconnect_interval: 200
@@ -117,9 +118,19 @@ data:
   baostock_parallel_chunk_size: 20
 ```
 
-`baostock_query_retries` controls retry count for baostock session-expired / not-logged-in errors. `baostock_reconnect_interval` controls proactive reconnect after N baostock queries. `baostock_parallel_workers` and `baostock_parallel_chunk_size` control the parallel stock daily backfill used by `--init` and normal updates. Interrupted init runs are resumable from local `stock_daily` dates.
+`data.provider` 支持三个常用值：
 
-If baostock prints blacklist/rate-limit messages, stop the run, wait for the service to recover, and keep `baostock_parallel_workers` at `1` or `2` before retrying.
+- `mixed`：默认值，先尝试 baostock；如果 baostock 登录返回黑名单或限流，会自动切换到 AKShare 继续跑。
+- `akshare`：直接使用 AKShare / 东方财富数据源，不再登录 baostock，速度通常慢一些，但更适合当前 baostock 黑名单环境。
+- `baostock`：只使用 baostock，适合 baostock 服务恢复且你想继续使用它时。
+
+`baostock_query_retries` 控制 baostock 会话过期或未登录错误的重试次数。`baostock_reconnect_interval` 控制每 N 次 baostock 查询主动重连。`baostock_parallel_workers` 和 `baostock_parallel_chunk_size` 只影响 baostock 的并行日线回填；切到 AKShare 后会自动改为顺序拉取，避免再次触发服务端限制。中断后的初始化会按本地 `stock_daily` 已有日期继续增量补数据。
+
+如果已经出现 `黑名单用户，请与管理员联系`，不需要注册账号；baostock 本身是免费免账号接口。建议保持默认 `provider: mixed`，或临时改成 `provider: akshare` 后重新运行：
+
+```powershell
+python run_daily.py --init
+```
 
 也就是说，首次执行：
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ import pandas as pd
 from src.build_pool import build_stock_pool
 from src.config import AppConfig, load_config
 from src.database import Database
-from src.fetch_data import DataFetcher, fetch_stock_daily_parallel
+from src.fetch_data import AkshareDataFetcher, DataFetcher, fetch_stock_daily_parallel
 from src.market_score import calculate_market_score
 from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
@@ -112,6 +112,45 @@ def _is_baostock_rate_limit_error(error: object) -> bool:
     return "blacklist" in message or "rate limit" in message or "\u9ed1\u540d\u5355" in str(error)
 
 
+
+def _data_provider(config: AppConfig) -> str:
+    return (config.data.provider or "mixed").strip().lower()
+
+
+def _create_configured_fetcher(config: AppConfig) -> Any:
+    provider = _data_provider(config)
+    if provider in {"akshare", "eastmoney"}:
+        return AkshareDataFetcher(config.data.start_date)
+    return DataFetcher(
+        config.data.start_date,
+        query_retries=config.data.baostock_query_retries,
+        reconnect_interval=config.data.baostock_reconnect_interval,
+    )
+
+
+def _allows_akshare_fallback(config: AppConfig) -> bool:
+    return _data_provider(config) in {"mixed", "auto", ""}
+
+
+@contextmanager
+def _open_configured_fetcher(fetcher: Any | None, config: AppConfig, external_fetcher: bool):
+    provider = _data_provider(config)
+    active_context = _managed_fetcher(fetcher or _create_configured_fetcher(config))
+    parallel_stock_fetch_allowed = not external_fetcher and provider not in {"akshare", "eastmoney"}
+    try:
+        active_fetcher = active_context.__enter__()
+    except Exception as exc:
+        if external_fetcher or not _allows_akshare_fallback(config) or not _is_baostock_rate_limit_error(exc):
+            raise
+        logging.getLogger(__name__).warning("baostock login blocked; fallback to AKShare: %s", exc)
+        active_context = _managed_fetcher(AkshareDataFetcher(config.data.start_date))
+        active_fetcher = active_context.__enter__()
+        parallel_stock_fetch_allowed = False
+    try:
+        yield active_fetcher, parallel_stock_fetch_allowed
+    finally:
+        active_context.__exit__(None, None, None)
+
 def update_market_data(
     db: Database,
     config: AppConfig,
@@ -121,14 +160,9 @@ def update_market_data(
 ) -> dict[str, int]:
     logger = logging.getLogger(__name__)
     external_fetcher = fetcher is not None
-    fetcher = fetcher or DataFetcher(
-        config.data.start_date,
-        query_retries=config.data.baostock_query_retries,
-        reconnect_interval=config.data.baostock_reconnect_interval,
-    )
     counts = {"stock_basic": 0, "stock_daily": 0, "index_daily": 0, "sector_daily": 0, "failed_symbols": 0}
 
-    with _managed_fetcher(fetcher) as active_fetcher:
+    with _open_configured_fetcher(fetcher, config, external_fetcher) as (active_fetcher, parallel_stock_fetch_allowed):
         if init:
             try:
                 basic = active_fetcher.fetch_stock_basic()
@@ -188,7 +222,7 @@ def update_market_data(
                     counts["failed_symbols"] += 1
                     logger.warning("[%s] stock daily update failed after retry: %s", code, exc)
 
-        use_parallel_stock_fetch = bool(stock_tasks) and not external_fetcher and config.data.baostock_parallel_workers > 1
+        use_parallel_stock_fetch = bool(stock_tasks) and parallel_stock_fetch_allowed and config.data.baostock_parallel_workers > 1
         if use_parallel_stock_fetch:
             logger.info(
                 "parallel stock daily update: %s/%s symbols, workers=%s, chunk_size=%s",
