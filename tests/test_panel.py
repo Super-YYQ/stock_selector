@@ -45,11 +45,26 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
     updated = panel.update_strategies(
         panel.StrategyUpdate(enabled=["ma_volume", "sector_leader"], profile="custom")
     )
+    pool = panel.update_pool_config(
+        panel.PoolConfigUpdate(
+            min_list_days=180,
+            min_price=5,
+            min_avg_amount_20d=200_000_000,
+            exclude_st=True,
+            exclude_suspended=True,
+            exclude_boards=["北交所", "科创板"],
+        )
+    )
 
     assert latest["report_date"] == "2026-06-22"
     assert "health" in status
     assert strategies["enabled"] == ["ma_volume"]
     assert updated["enabled"] == ["ma_volume", "sector_leader"]
+    assert pool["min_list_days"] == 180
+    assert pool["exclude_boards"] == ["北交所", "科创板"]
+    persisted = (tmp_path / "config" / "stock_pool.yml").read_text(encoding="utf-8")
+    assert "北交所" in persisted
+    assert "科创板" in persisted
 
 
 def test_task_runner_captures_background_output() -> None:

@@ -11,7 +11,8 @@ Read these files before changing behavior:
 1. `README.md` for user workflows
 2. `docs/ARCHITECTURE.md` for module boundaries and data flow
 3. `docs/STRATEGIES.md` for strategy semantics
-4. `config/strategy.yml` and `config/stock_pool.yml` for supported settings
+4. `docs/CONFIGURATION.md` for every supported setting and unit
+5. `config/strategy.yml` and `config/stock_pool.yml` for active values
 
 Main entry points:
 
@@ -27,6 +28,7 @@ Main entry points:
 - `src/build_pool.py`: eligibility filters
 - `src/market_score.py`, `sector_score.py`: environment factors
 - `src/stock_character.py`, `volume_price_score.py`: stock factors
+- `src/stock_context.py`: cached industry, concept, limit-up clue, and sector-stage narratives for ranked candidates
 - `src/strategies/`: independent strategy signals and shared feature cache
 - `src/risk_filter.py`, `scoring.py`: penalties and ranking
 - `src/report.py`: styled Excel output
@@ -47,6 +49,8 @@ Main entry points:
 - The panel binds to `127.0.0.1` by default. Public server deployment requires reverse-proxy authentication and HTTPS.
 - Strategy scores are aggregated by family maximum, then summed across families. Do not restore naive summation of related strategies.
 - Every selected stock must retain an explainable reason and risk warning.
+- Treat concept and limit-up context as best-effort enrichment. Label inferred relationships as clues, never as confirmed news causes.
+- Market-board exclusion must recognize both current and legacy Beijing Exchange code prefixes.
 
 ## Strategy Development
 
@@ -68,6 +72,7 @@ Current families: `breakout`, `trend`, `pullback`, `event`, `sector`.
 SQLite tables include market data plus:
 
 - `stock_sync_status` for resumable provider migration/backfill
+- `stock_context`, `stock_event`, and `sector_context` for cached candidate narratives
 - `selection_history` for Top N snapshots and forward returns
 - `run_history` for panel and scheduled-run visibility
 

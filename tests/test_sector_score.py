@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
+from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry, market_board
 
 
 def test_calculate_sector_scores_ranks_hot_industries() -> None:
@@ -57,3 +57,11 @@ def test_local_market_board_fallback_assigns_industry_and_aggregates_daily() -> 
     assert prepared["industry"].tolist() == ["深市主板", "创业板", "科创板", "北交所"]
     assert set(sectors["sector_name"]) == {"深市主板", "创业板", "科创板", "北交所"}
     assert sectors.loc[sectors["sector_name"] == "北交所", "amount"].iloc[0] == 400
+
+
+def test_market_board_recognizes_legacy_beijing_exchange_codes() -> None:
+    assert market_board("430001") == "北交所"
+    assert market_board("830001") == "北交所"
+    assert market_board("870001") == "北交所"
+    assert market_board("880001") == "北交所"
+    assert market_board("920001") == "北交所"

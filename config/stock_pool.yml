@@ -4,6 +4,8 @@ stock_pool:
   min_avg_amount_20d: 100000000
   exclude_st: true
   exclude_suspended: true
+  exclude_boards:
+    - 北交所
 
 risk:
   max_pct_chg_5d: 30

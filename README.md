@@ -14,6 +14,8 @@
 - 本地数据：日线保存在 SQLite，日常只做增量更新
 - 市场判断：指数趋势、上涨比例、涨跌停数量和风险等级
 - 板块评分：行业或市场板块涨幅、持续性、量能和强势股数量
+- 个股背景：核心概念、细分行业、涨停量价线索和行业近半年阶段表现
+- 股票池范围：可排除北交所、科创板、创业板或其他不关注的市场板块
 - 多因子排名：板块、股性、量价、RPS、市场修正与风险扣分
 - 十种策略：突破、趋势、回踩、事件、板块共振五类策略
 - 结果追踪：自动记录入选股票，并回填 1 / 3 / 5 / 10 日收益
@@ -97,11 +99,11 @@ powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18
 
 ### 观察名单
 
-在 Top 50 / Top 10 间切换，可按股票代码、名称、板块或命中策略搜索，并下载 Excel。
+在 Top 50 / Top 10 间切换，可按代码、名称、行业、概念和市场板搜索。列表只展示短标签；点击行末详情按钮可查看完整入选理由、得分结构、行业阶段表现、涨停线索、次日条件和风险说明。
 
-### 策略管理
+### 策略与股票池
 
-支持四个预设组合，也可以逐项开关策略：
+支持四个预设组合，也可以逐项开关策略，并直接配置最低股价、上市天数、最低成交额、ST / 停牌过滤和排除市场板块：
 
 | 组合 | 适用方向 |
 |---|---|
@@ -141,11 +143,12 @@ powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18
 2. 强势板块
 3. Top50 观察名单
 4. Top10 重点关注
-5. 策略表现
-6. 风险过滤名单
-7. 原始评分明细
+5. 个股说明（完整行业、题材、策略与风险说明）
+6. 策略表现
+7. 风险过滤名单
+8. 原始评分明细
 
-原始明细默认隐藏，可在 Excel 中取消隐藏。表格包含冻结表头、筛选、条件颜色、数据条、统一列宽和风险说明。
+Top50 / Top10 使用短标签保持紧凑，完整长文本集中在“个股说明”。表格包含冻结表头与股票列、筛选、条件颜色、数据条、分组页签和统一列宽；原始明细默认隐藏，可在 Excel 中取消隐藏。
 
 ## GitHub Pages 手机查看
 
@@ -154,9 +157,10 @@ GitHub Pages 只部署 `site/` 中的静态报告，不上传 SQLite、日志或
 ### 一次性设置
 
 1. 打开仓库 **Settings → Pages**
-2. 将 Source 设为 **GitHub Actions**
-3. 确认本机 Git 已登录并可执行 `git push`
-4. 双击 `install_scheduler_publish.bat`
+2. 在 **Build and deployment → Source** 中选择 **GitHub Actions** 并保存
+3. 回到 **Actions**，重新运行失败的 Pages 任务，确认部署成功
+4. 确认本机 Git 已登录并可执行 `git push`
+5. 双击 `install_scheduler_publish.bat`
 
 之后工作日任务成功时会：
 
@@ -170,6 +174,8 @@ GitHub Pages 只部署 `site/` 中的静态报告，不上传 SQLite、日志或
 [https://super-yyq.github.io/stock_selector/](https://super-yyq.github.io/stock_selector/)
 
 > GitHub Pages 通常是公开页面。静态报告中不要加入账户信息、交易记录或其他隐私内容。
+
+> 首次未启用 Pages 时，Actions 会在 `Configure Pages` 步骤提示 `Get Pages site failed` 或 `Not Found`。这表示仓库尚未选择 GitHub Actions 作为 Pages 来源，按上面的第 1、2 步设置一次即可，不需要修改数据程序或创建访问令牌。
 
 手动发布：
 
@@ -210,47 +216,24 @@ chmod +x start.sh daily.sh
 
 ## 配置
 
-主要配置位于 `config/strategy.yml` 和 `config/stock_pool.yml`。
+主要配置位于：
 
-常用参数：
+- [`config/strategy.yml`](config/strategy.yml)：数据源、并发、初始化验收、报告、面板、功能开关、总分权重和策略。
+- [`config/stock_pool.yml`](config/stock_pool.yml)：股票池范围、市场板排除和风险阈值。
 
-```yaml
-data:
-  provider: tdx
-  start_date: "2023-01-01"
-  analysis_lookback_days: 240
+常用设置可直接在面板的 **策略与股票池** 页面修改。编辑 YAML 后，配置会在下一次任务中生效。
 
-report:
-  top_observe: 50
-  top_focus: 10
-  output_dir: reports
-  site_dir: site
-  history_days: 90
+| 常见目标 | 修改参数 |
+|---|---|
+| 不观察北交所 / 科创板 | `stock_pool.exclude_boards` |
+| 提高流动性要求 | `stock_pool.min_avg_amount_20d` |
+| 缩小或扩大名单 | `report.top_observe`、`report.top_focus` |
+| 更偏好突破或回踩 | 面板策略组合，或 `strategies.enabled` |
+| 调整各因子影响 | `scoring.*_weight` |
+| 减少题材网络请求 | `features.context_top_n`、`context_cache_days` |
+| 改端口或禁止自动开浏览器 | `panel.port`、`panel.open_browser` |
 
-panel:
-  host: 127.0.0.1
-  port: 8765
-
-strategies:
-  profile: balanced
-  enabled:
-    - ma_volume
-    - turtle_breakout
-  strategy_score_weight: 15
-```
-
-股票池和风险参数：
-
-```yaml
-stock_pool:
-  min_list_days: 120
-  min_price: 3
-  min_avg_amount_20d: 100000000
-  exclude_st: true
-  exclude_suspended: true
-```
-
-修改策略开关优先使用面板；修改阈值和权重时编辑 YAML 后重新运行。
+每一个配置项的默认值、单位、可选值、作用和调参影响见 **[完整配置手册](docs/CONFIGURATION.md)**。策略触发条件见 **[策略说明](docs/STRATEGIES.md)**。
 
 ## 数据与磁盘
 
@@ -343,9 +326,17 @@ logs/                   每日运行日志
 
 非交易日会使用数据库中的最新交易日，这是正常行为。
 
-**Pages 没有更新**
+**为什么显示“涨停线索”，不是“涨停原因”**
 
-检查 GitHub 仓库的 Actions 页面、Pages Source 设置，以及本机 `git push` 权限。
+免费涨停池能稳定提供涨停事实、连板和行业，但不总能提供可核验的新闻原因。系统会展示涨停统计与相关核心概念，并明确标为“线索”；不会把概念关联伪装成已确认的涨停原因。
+
+**Pages 在 `Configure Pages` 时报 `Not Found`**
+
+进入仓库 **Settings → Pages → Build and deployment → Source**，选择 **GitHub Actions** 并保存，再重新运行失败任务。这是仓库首次启用设置，不是程序拉取数据失败。
+
+**Pages 已部署但报告没有更新**
+
+检查定时任务是否成功执行、`site/data/latest.json` 是否发生变化，以及本机是否具备 `git push` 权限。
 
 ## 免责声明
 

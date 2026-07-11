@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.config import load_config
+from src.config import MARKET_BOARDS, MARKET_BOARD_OPTIONS, load_config
 from src.database import Database
 from src.strategies.registry import STRATEGY_PROFILES, STRATEGY_REGISTRY, strategy_catalog
 
@@ -46,6 +46,15 @@ class RunRequest(BaseModel):
 class StrategyUpdate(BaseModel):
     enabled: list[str]
     profile: str = "custom"
+
+
+class PoolConfigUpdate(BaseModel):
+    min_list_days: int = Field(ge=1)
+    min_price: float = Field(gt=0)
+    min_avg_amount_20d: float = Field(ge=0)
+    exclude_st: bool = True
+    exclude_suspended: bool = True
+    exclude_boards: list[str] = Field(default_factory=list)
 
 
 class TaskRunner:
@@ -204,6 +213,48 @@ def update_strategies(update: StrategyUpdate) -> dict[str, Any]:
     )
     temporary.replace(path)
     return strategies()
+
+
+@app.get("/api/pool-config")
+def pool_config() -> dict[str, Any]:
+    config = _config().stock_pool
+    return {
+        "min_list_days": config.min_list_days,
+        "min_price": config.min_price,
+        "min_avg_amount_20d": config.min_avg_amount_20d,
+        "exclude_st": config.exclude_st,
+        "exclude_suspended": config.exclude_suspended,
+        "exclude_boards": config.exclude_boards,
+        "available_boards": list(MARKET_BOARD_OPTIONS),
+    }
+
+
+@app.put("/api/pool-config")
+def update_pool_config(update: PoolConfigUpdate) -> dict[str, Any]:
+    unknown = sorted(set(update.exclude_boards) - MARKET_BOARDS)
+    if unknown:
+        raise HTTPException(status_code=422, detail="未知市场板块: " + "、".join(unknown))
+
+    path = ROOT / "config" / "stock_pool.yml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    raw.setdefault("stock_pool", {})
+    raw["stock_pool"].update(
+        {
+            "min_list_days": update.min_list_days,
+            "min_price": update.min_price,
+            "min_avg_amount_20d": update.min_avg_amount_20d,
+            "exclude_st": update.exclude_st,
+            "exclude_suspended": update.exclude_suspended,
+            "exclude_boards": list(dict.fromkeys(update.exclude_boards)),
+        }
+    )
+    temporary = path.with_suffix(".yml.tmp")
+    temporary.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+    return pool_config()
 
 
 @app.post("/api/run")

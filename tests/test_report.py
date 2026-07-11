@@ -35,6 +35,14 @@ def test_write_excel_report_creates_required_sheets(tmp_path: Path) -> None:
                 "volume_price_score": 21,
                 "strategy_score": 15,
                 "matched_strategies": "均线放量突破",
+                "reason_tags": "均线放量突破、机器人",
+                "risk_tags": "距离20日线偏远",
+                "concepts": "机器人概念、人工智能",
+                "market_board": "深市主板",
+                "sector": "机械设备",
+                "limit_up_reason": "量价涨停线索",
+                "industry_activity": "机器人近20日累计 +12.0%",
+                "stock_context_summary": "所属行业：机器人；核心概念：机器人概念",
                 "strategy_reason": "命中策略：均线放量突破",
                 "risk_penalty": 5,
                 "selection_reason": "放量突破",
@@ -54,13 +62,15 @@ def test_write_excel_report_creates_required_sheets(tmp_path: Path) -> None:
         "强势板块",
         "Top50观察名单",
         "Top10重点关注",
+        "个股说明",
         "策略表现",
         "风险过滤名单",
         "原始评分明细",
     ]
     assert workbook["市场环境"]["A1"].value == "2026-06-22 A股盘后观察"
     assert workbook["Top50观察名单"]["A1"].value == "排名"
-    assert workbook["Top50观察名单"]["Q1"].value == "命中策略"
-    assert workbook["Top50观察名单"].freeze_panes == "A2"
+    assert workbook["Top50观察名单"]["R1"].value == "入选理由"
+    assert workbook["Top50观察名单"].freeze_panes == "D2"
+    assert workbook["个股说明"]["M1"].value == "完整入选理由"
     assert workbook["Top50观察名单"]["A1"].fill.fgColor.rgb.endswith("164E4A")
     assert workbook["原始评分明细"].sheet_state == "hidden"

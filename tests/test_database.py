@@ -18,6 +18,9 @@ def test_database_creates_core_tables(tmp_path: Path) -> None:
         "sector_daily",
         "run_metadata",
         "stock_sync_status",
+        "stock_context",
+        "sector_context",
+        "stock_event",
         "selection_history",
         "run_history",
     } <= tables

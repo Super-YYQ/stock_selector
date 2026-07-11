@@ -7,6 +7,10 @@ from typing import Any
 import yaml
 
 
+MARKET_BOARD_OPTIONS = ("沪市主板", "深市主板", "创业板", "科创板", "北交所", "其他")
+MARKET_BOARDS = set(MARKET_BOARD_OPTIONS)
+
+
 DEFAULT_ENABLED_STRATEGIES = [
     "ma_volume",
     "turtle_breakout",
@@ -61,6 +65,10 @@ class FeatureConfig:
     enable_sector_score: bool = True
     enable_rps: bool = True
     enable_ai_summary: bool = False
+    enable_context_enrichment: bool = True
+    context_top_n: int = 50
+    context_cache_days: int = 7
+    context_workers: int = 4
 
 
 @dataclass(frozen=True)
@@ -88,6 +96,7 @@ class StockPoolConfig:
     min_avg_amount_20d: float = 100000000
     exclude_st: bool = True
     exclude_suspended: bool = True
+    exclude_boards: list[str] = field(default_factory=lambda: ["北交所"])
 
 
 @dataclass(frozen=True)
@@ -131,7 +140,7 @@ def _section(raw: dict[str, Any], name: str) -> dict[str, Any]:
 
 def _validate(config: AppConfig) -> None:
     if config.data.provider.strip().lower() not in {"tdx", "akshare", "eastmoney", "baostock", "mixed", "auto"}:
-        raise ValueError("provider must be one of: tdx, akshare, baostock, mixed, auto")
+        raise ValueError("provider must be one of: tdx, akshare, eastmoney, baostock, mixed, auto")
     if config.data.tdx_parallel_workers < 1:
         raise ValueError("tdx_parallel_workers must be greater than 0")
     if config.data.tdx_parallel_chunk_size < 1:
@@ -162,6 +171,15 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("min_list_days must be greater than 0")
     if config.stock_pool.min_avg_amount_20d < 0:
         raise ValueError("min_avg_amount_20d must be non-negative")
+    unknown_boards = set(config.stock_pool.exclude_boards) - MARKET_BOARDS
+    if unknown_boards:
+        raise ValueError(f"stock_pool.exclude_boards contains unknown values: {sorted(unknown_boards)}")
+    if config.features.context_top_n < 1:
+        raise ValueError("features.context_top_n must be greater than 0")
+    if config.features.context_cache_days < 1:
+        raise ValueError("features.context_cache_days must be greater than 0")
+    if config.features.context_workers < 1:
+        raise ValueError("features.context_workers must be greater than 0")
     if config.report.top_observe < config.report.top_focus:
         raise ValueError("top_observe must be greater than or equal to top_focus")
     if config.report.history_days < 1:

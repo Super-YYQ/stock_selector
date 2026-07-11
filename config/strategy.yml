@@ -31,6 +31,10 @@ features:
   enable_sector_score: true
   enable_rps: true
   enable_ai_summary: false
+  enable_context_enrichment: true
+  context_top_n: 50
+  context_cache_days: 7
+  context_workers: 4
 
 scoring:
   sector_score_weight: 25

@@ -28,6 +28,7 @@ from src.scoring import build_ranked_results
 from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
 from src.strategies.registry import run_enabled_strategies
 from src.stock_character import calculate_stock_character_scores
+from src.stock_context import enrich_ranked_context
 from src.volume_price_score import calculate_volume_price_scores
 from src.web_report import build_report_payload, write_static_report
 
@@ -528,13 +529,19 @@ def run(argv: list[str] | None = None) -> Path | None:
         factors = _add_risk_inputs(factors)
         risk = calculate_risk_penalties(factors, config.risk, config.scoring)
         factors = factors.merge(risk, on="code", how="left")
-        ranked, top50, top10 = build_ranked_results(
+        ranked, _top50, _top10 = build_ranked_results(
             factors,
             market,
             config.scoring,
             config.report,
             config.strategies.strategy_score_weight,
         )
+        try:
+            ranked = enrich_ranked_context(db, ranked, report_date, config.features)
+        except Exception as exc:
+            logger.warning("个股行业与题材说明更新失败，继续使用基础评分结果: %s", exc)
+        top50 = ranked.head(config.report.top_observe).copy()
+        top10 = ranked.head(config.report.top_focus).copy()
 
         db.save_selections(report_date, ranked, config.report.top_observe)
         updated_returns = db.refresh_selection_returns()

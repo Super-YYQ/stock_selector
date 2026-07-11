@@ -28,7 +28,8 @@ TOP50_COLUMNS = {
     "code": "股票代码",
     "name": "股票名称",
     "total_score": "总分",
-    "industry": "所属板块",
+    "industry": "所属行业",
+    "market_board": "市场板块",
     "pct_chg": "今日涨跌幅",
     "return_5d": "近5日涨跌幅",
     "return_20d": "近20日涨跌幅",
@@ -40,11 +41,10 @@ TOP50_COLUMNS = {
     "volume_price_score": "量价分",
     "strategy_score": "策略分",
     "risk_penalty": "风险扣分",
-    "matched_strategies": "命中策略",
-    "strategy_reason": "策略理由",
-    "strategy_family_count": "策略家族数",
-    "selection_reason": "入选理由",
-    "risk_warning": "风险提示",
+    "reason_tags": "入选理由",
+    "concepts": "核心概念",
+    "limit_up_reason": "涨停线索",
+    "risk_tags": "风险提示",
 }
 
 TOP10_COLUMNS = {
@@ -52,12 +52,33 @@ TOP10_COLUMNS = {
     "code": "股票代码",
     "name": "股票名称",
     "total_score": "总分",
-    "industry": "所属板块",
+    "industry": "所属行业",
+    "market_board": "市场板块",
     "pct_chg": "今日涨跌幅",
-    "matched_strategies": "命中策略",
-    "selection_reason": "重点关注理由",
+    "reason_tags": "重点关注理由",
+    "concepts": "核心概念",
+    "limit_up_reason": "涨停线索",
     "next_day_condition": "次日观察条件",
-    "risk_warning": "风险提示",
+    "risk_tags": "风险提示",
+}
+
+DETAIL_COLUMNS = {
+    "rank": "排名",
+    "code": "股票代码",
+    "name": "股票名称",
+    "market_board": "市场板块",
+    "sector": "一级行业",
+    "industry": "所属行业",
+    "concepts": "核心概念",
+    "event_tags": "动态题材标签",
+    "limit_up_reason": "涨停线索",
+    "industry_activity": "行业阶段表现",
+    "matched_strategies": "命中策略",
+    "strategy_reason": "策略理由",
+    "selection_reason": "完整入选理由",
+    "stock_context_summary": "行业与题材说明",
+    "next_day_condition": "次日观察条件",
+    "risk_warning": "完整风险提示",
 }
 
 SECTOR_COLUMNS = {
@@ -94,8 +115,7 @@ FILTER_COLUMNS = {
 
 
 def _rename_existing(df: pd.DataFrame, columns: dict[str, str]) -> pd.DataFrame:
-    existing = [column for column in columns if column in df.columns]
-    return df[existing].rename(columns=columns)
+    return df.reindex(columns=list(columns)).rename(columns=columns)
 
 
 def _style_header(ws, row: int = 1) -> None:
@@ -114,7 +134,24 @@ def _column_values(ws, column: int, limit: int = 100) -> Iterable[object]:
 
 
 def _fit_columns(ws) -> None:
-    long_headers = {"命中策略", "策略理由", "入选理由", "重点关注理由", "次日观察条件", "风险提示", "过滤原因", "强势原因"}
+    long_headers = {
+        "命中策略",
+        "入选标签",
+        "核心概念",
+        "涨停线索",
+        "行业阶段表现",
+        "行业与题材说明",
+        "动态题材标签",
+        "策略理由",
+        "完整入选理由",
+        "完整风险提示",
+        "入选理由",
+        "重点关注理由",
+        "次日观察条件",
+        "风险提示",
+        "过滤原因",
+        "强势原因",
+    }
     for column in range(1, ws.max_column + 1):
         header = str(ws.cell(row=1, column=column).value or "")
         values = [len(str(value)) for value in _column_values(ws, column) if value is not None]
@@ -130,19 +167,41 @@ def _fit_columns(ws) -> None:
 
 def _style_data_sheet(ws) -> None:
     _style_header(ws)
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = "D2" if ws.title in {"Top50观察名单", "Top10重点关注", "个股说明"} else "A2"
     ws.sheet_view.showGridLines = False
     ws.auto_filter.ref = ws.dimensions
+    headers = {str(cell.value): cell.column for cell in ws[1] if cell.value is not None}
+    wrap_headers = {
+        "入选理由",
+        "重点关注理由",
+        "核心概念",
+        "涨停线索",
+        "风险提示",
+        "命中策略",
+        "动态题材标签",
+        "行业阶段表现",
+        "策略理由",
+        "完整入选理由",
+        "行业与题材说明",
+        "次日观察条件",
+        "完整风险提示",
+        "过滤原因",
+        "强势原因",
+    }
+    wrap_columns = {column for header, column in headers.items() if header in wrap_headers}
     thin = Side(style="hair", color=COLORS["line"])
     for row in range(2, ws.max_row + 1):
         if row % 2 == 0:
             for cell in ws[row]:
                 cell.fill = PatternFill("solid", fgColor=COLORS["paper"])
-        ws.row_dimensions[row].height = 24
+        ws.row_dimensions[row].height = 34 if wrap_columns else 25
         for cell in ws[row]:
             cell.border = Border(bottom=thin)
-            cell.alignment = Alignment(vertical="center", wrap_text=cell.column >= 17)
-    headers = {str(cell.value): cell.column for cell in ws[1] if cell.value is not None}
+            cell.alignment = Alignment(
+                vertical="center",
+                horizontal="left" if cell.column in wrap_columns else "center",
+                wrap_text=cell.column in wrap_columns,
+            )
     for header, column in headers.items():
         letter = get_column_letter(column)
         if "涨跌幅" in header or "平均" in header or "收益" in header or "胜率" in header:
@@ -178,7 +237,7 @@ def _style_data_sheet(ws) -> None:
                 f"{letter}2:{letter}{ws.max_row}",
                 DataBarRule(start_type="num", start_value=0, end_type="num", end_value=100, color=COLORS["accent"]),
             )
-        elif "股票代码" == header:
+        elif header == "股票代码":
             for cell in ws[letter][1:]:
                 cell.number_format = "@"
                 if cell.value is not None:
@@ -266,12 +325,23 @@ def write_excel_report(
         _rename_existing(strong_sectors, SECTOR_COLUMNS).head(30).to_excel(writer, sheet_name="强势板块", index=False)
         _rename_existing(top50, TOP50_COLUMNS).to_excel(writer, sheet_name="Top50观察名单", index=False)
         _rename_existing(top10, TOP10_COLUMNS).to_excel(writer, sheet_name="Top10重点关注", index=False)
+        _rename_existing(top50, DETAIL_COLUMNS).to_excel(writer, sheet_name="个股说明", index=False)
         _rename_existing(performance, PERFORMANCE_COLUMNS).to_excel(writer, sheet_name="策略表现", index=False)
         _rename_existing(filtered, FILTER_COLUMNS).to_excel(writer, sheet_name="风险过滤名单", index=False)
         ranked.to_excel(writer, sheet_name="原始评分明细", index=False)
 
-        for name in ["强势板块", "Top50观察名单", "Top10重点关注", "策略表现", "风险过滤名单", "原始评分明细"]:
+        for name in ["强势板块", "Top50观察名单", "Top10重点关注", "个股说明", "策略表现", "风险过滤名单", "原始评分明细"]:
             _style_data_sheet(writer.sheets[name])
+        tab_colors = {
+            "市场环境": COLORS["header"],
+            "强势板块": COLORS["gold"],
+            "Top50观察名单": COLORS["green"],
+            "Top10重点关注": COLORS["accent"],
+            "个股说明": COLORS["muted"],
+            "风险过滤名单": COLORS["red"],
+        }
+        for name, color in tab_colors.items():
+            writer.sheets[name].sheet_properties.tabColor = color
         writer.sheets["原始评分明细"].sheet_state = "hidden"
         writer.book.active = writer.book.sheetnames.index("市场环境")
     return path

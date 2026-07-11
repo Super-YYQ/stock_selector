@@ -61,6 +61,9 @@ risk:
     assert config.features.enable_sector_score is False
     assert config.stock_pool.min_price == 4
     assert config.stock_pool.min_list_days == 120
+    assert config.stock_pool.exclude_boards == ["北交所"]
+    assert config.features.enable_context_enrichment is True
+    assert config.features.context_top_n == 50
     assert config.risk.max_pct_chg_5d == 22
     assert config.scoring.risk_penalty_max == 18
     assert config.strategies.enabled == ["ma_volume"]
@@ -87,3 +90,16 @@ def test_data_config_defaults_use_conservative_parallelism() -> None:
     assert config.data.tdx_parallel_workers == 4
     assert config.data.tdx_parallel_chunk_size == 50
     assert config.data.provider == "tdx"
+
+
+def test_load_config_rejects_unknown_market_board(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "strategy.yml").write_text("", encoding="utf-8")
+    (config_dir / "stock_pool.yml").write_text(
+        "stock_pool:\n  exclude_boards:\n    - 不存在的板块\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exclude_boards"):
+        load_config(config_dir)

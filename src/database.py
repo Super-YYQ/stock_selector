@@ -78,6 +78,38 @@ CREATE TABLE IF NOT EXISTS stock_sync_status (
     PRIMARY KEY (code, provider, price_basis, start_date)
 );
 
+CREATE TABLE IF NOT EXISTS stock_context (
+    code TEXT PRIMARY KEY,
+    sector TEXT,
+    industry TEXT,
+    concepts TEXT,
+    event_tags TEXT,
+    source TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sector_context (
+    sector_name TEXT NOT NULL,
+    as_of_date TEXT NOT NULL,
+    return_5d REAL,
+    return_20d REAL,
+    return_120d REAL,
+    active_days_20 INTEGER,
+    summary TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (sector_name, as_of_date)
+);
+
+CREATE TABLE IF NOT EXISTS stock_event (
+    trade_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    summary TEXT,
+    industry TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (trade_date, code, event_type)
+);
+
 CREATE TABLE IF NOT EXISTS selection_history (
     report_date TEXT NOT NULL,
     code TEXT NOT NULL,

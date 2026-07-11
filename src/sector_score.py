@@ -5,7 +5,7 @@ import pandas as pd
 
 def market_board(code: str) -> str:
     normalized = str(code).zfill(6)
-    if normalized.startswith("92"):
+    if normalized.startswith(("43", "83", "87", "88", "92")):
         return "北交所"
     if normalized.startswith(("688", "689")):
         return "科创板"

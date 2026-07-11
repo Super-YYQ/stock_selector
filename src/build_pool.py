@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 
 from src.config import StockPoolConfig
+from src.sector_score import market_board
 
 
 def _list_days(list_date: str, report_date: str) -> int | None:
@@ -45,11 +46,19 @@ def build_stock_pool(
     first_trade_dates = _first_trade_dates(daily, report_date)
     pool = basic.merge(latest, on="code", how="left").merge(avg_amount, on="code", how="left")
     pool = pool.merge(first_trade_dates, on="code", how="left")
+    pool["market_board"] = pool["code"].astype(str).map(market_board)
     pool["filter_reason"] = ""
 
     def add_reason(mask: pd.Series, reason: str) -> None:
         pool.loc[mask, "filter_reason"] = pool.loc[mask, "filter_reason"].apply(
             lambda existing: reason if not existing else f"{existing}; {reason}"
+        )
+
+    excluded_boards = set(config.exclude_boards)
+    if excluded_boards:
+        add_reason(
+            pool["market_board"].isin(excluded_boards),
+            "已排除市场板块：" + "、".join(config.exclude_boards),
         )
 
     if config.exclude_st:

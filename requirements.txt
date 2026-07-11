@@ -4,6 +4,7 @@ PyYAML>=6.0
 openpyxl>=3.1
 baostock>=0.9
 akshare>=1.10
+requests>=2.31
 pytdx>=1.72
 pytest>=8.0
 fastapi>=0.115

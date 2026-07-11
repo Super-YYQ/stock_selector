@@ -61,3 +61,30 @@ def test_build_stock_pool_uses_earliest_daily_date_when_list_date_missing() -> N
 
     assert eligible["code"].tolist() == ["000001"]
     assert filtered["code"].tolist() == ["000002"]
+
+
+def test_build_stock_pool_excludes_configured_market_boards() -> None:
+    basic = pd.DataFrame(
+        [
+            {"code": "920001", "name": "北交股票", "industry": "", "list_date": "2020-01-01", "is_st": 0, "is_listed": 1},
+            {"code": "688001", "name": "科创股票", "industry": "", "list_date": "2020-01-01", "is_st": 0, "is_listed": 1},
+            {"code": "000001", "name": "主板股票", "industry": "", "list_date": "2020-01-01", "is_st": 0, "is_listed": 1},
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {"code": code, "trade_date": "2026-06-22", "close": 10, "amount": 200000000, "is_suspended": 0, "pct_chg": 1}
+            for code in basic["code"]
+        ]
+    )
+
+    eligible, filtered = build_stock_pool(
+        basic,
+        daily,
+        "2026-06-22",
+        StockPoolConfig(min_avg_amount_20d=0, exclude_boards=["北交所", "科创板"]),
+    )
+
+    assert eligible["code"].tolist() == ["000001"]
+    assert set(filtered["code"]) == {"920001", "688001"}
+    assert filtered["filter_reason"].str.contains("已排除市场板块").all()
