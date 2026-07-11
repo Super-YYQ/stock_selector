@@ -1,337 +1,245 @@
-# 免费（乞丐）版 A 股盘后多因子选股助手
+# A 股盘后多因子选股助手
 
-这是一个个人本地运行的 A 股盘后复盘工具。它每天收盘后更新免费数据源，按市场环境、行业热度、历史股性、量价结构、相对强弱、策略命中和风险扣分生成观察名单。
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC)](tests)
+[![Deploy report to GitHub Pages](https://github.com/Super-YYQ/stock_selector/actions/workflows/pages.yml/badge.svg)](https://github.com/Super-YYQ/stock_selector/actions/workflows/pages.yml)
 
-本项目不是投资建议，不做自动交易，不连接券商接口，不使用实时行情。选出的股票只用于第二天人工观察。
+免费、本地、可解释的 A 股盘后复盘工具。每天收盘后更新日线数据，评估大盘和板块环境，运行多因子策略，生成 Top 50 观察名单、Top 10 重点关注、Excel 报告和手机网页。
 
-## 应该怎么开始
+> 本项目只做盘后复盘和观察名单筛选，不构成投资建议，不连接券商，也不执行自动交易。
 
-如果只是想先跑起来，按下面 5 步走。
+## 功能
 
-### 1. 打开 PowerShell，进入项目目录
+- 免费数据源：默认使用无需账号登录的通达信行情协议，保留 AKShare / Baostock 适配
+- 本地数据：日线保存在 SQLite，日常只做增量更新
+- 市场判断：指数趋势、上涨比例、涨跌停数量和风险等级
+- 板块评分：行业或市场板块涨幅、持续性、量能和强势股数量
+- 多因子排名：板块、股性、量价、RPS、市场修正与风险扣分
+- 十种策略：突破、趋势、回踩、事件、板块共振五类策略
+- 结果追踪：自动记录入选股票，并回填 1 / 3 / 5 / 10 日收益
+- 双报告：格式化 Excel + 响应式网页
+- 管理面板：策略开关、任务执行、数据健康、历史表现和报告下载
+- 自动化：Windows 计划任务、Docker Compose、GitHub Pages
 
-```powershell
-cd \仓库路径\
-```
+## Windows 快速开始
 
-### 2. 确认 Python 版本
+### 1. 安装 Python
 
-推荐使用 Python 3.12.x。
+安装 [Python 3.12](https://www.python.org/downloads/)，安装时勾选 **Add Python to PATH**。
 
-```powershell
-python --version
-```
-
-如果输出是 `Python 3.12.x`，继续下一步。如果不是，也可以试试下面这个命令：
+验证安装：
 
 ```powershell
 py -3.12 --version
 ```
 
-如果这两个命令都找不到 Python 3.12，需要先安装 Python 3.12。
+### 2. 启动面板
 
-### 3. 创建并激活虚拟环境
+双击仓库根目录的 **`start.bat`**。
 
-第一次使用时执行：
+脚本会自动完成以下工作：
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\activate
-```
+1. 创建 `.venv` 虚拟环境
+2. 安装或更新依赖
+3. 启动本地面板
+4. 打开 `http://127.0.0.1:8765`
 
-如果你的电脑上 `python` 不是 3.12，可以用：
+不需要手动激活虚拟环境。
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\activate
-```
+### 3. 首次初始化
 
-激活成功后，命令行前面通常会出现 `(.venv)`。
+打开面板的 **运行状态**，将运行模式选为 **首次初始化 / 补全**，点击 **开始执行**。
 
-以后每天再次使用时，只需要进入目录并激活虚拟环境：
+默认从 `2023-01-01` 开始保存全市场日线。首次初始化需要下载数百万条记录，耗时取决于网络和电脑性能；任务支持断点续跑，中断后再次执行初始化即可继续。
 
-```powershell
-cd \仓库路径\
-.\.venv\Scripts\activate
-```
+初始化成功的判断：
 
-### 4. 安装依赖
+- 股票覆盖率达到配置阈值，默认 90%
+- 日线记录达到最低数量
+- 三个主要指数已写入
+- 面板显示数据健康为“正常”
 
-```powershell
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+### 4. 每日使用
 
-本项目使用的核心依赖包括 `pandas`、`numpy`、`SQLite`、`openpyxl`、`pytdx`、`baostock` 和 `AKShare`。默认使用通达信公开行情节点（pytdx），免费、免账号，也不会登录 baostock。
+收盘后有三种方式：
 
-### 5. 首次初始化历史数据
+- 打开面板，点击右上角 **执行盘后任务**
+- 双击 `daily.bat`
+- 安装工作日自动任务，见下文
 
-第一次运行需要先拉取基础信息和历史行情：
+运行结束后可在面板查看结果，也可打开：
 
-```powershell
-python run_daily.py --init
-```
+- `reports/YYYY-MM-DD_盘后选股报告.xlsx`
+- `site/index.html`
 
-这一步会做几件事：
+## 一键入口
 
-- 创建本地 SQLite 数据库：`data/stock.db`
-- 拉取 A 股基础信息
-- 拉取个股日线数据
-- 拉取主要指数日线数据
-- 尝试拉取行业板块数据；不可用时从个股日线聚合沪市主板、深市主板、创业板、科创板和北交所热度
-- 生成当日盘后报告
+| 文件 | 用途 |
+|---|---|
+| `start.bat` | 自动准备环境并启动管理面板 |
+| `init.bat` | 初始化或补全历史数据 |
+| `daily.bat` | 执行一次每日增量更新和选股 |
+| `install_scheduler.bat` | 安装工作日 17:30 自动任务 |
+| `install_scheduler_publish.bat` | 自动运行，并将网页报告推送到 GitHub |
+| `uninstall_scheduler.bat` | 删除自动任务 |
 
-首次初始化需要遍历全市场。当前 Windows 环境实测：从 2023-01-01 回填约 5530 只股票用了约 12 分钟，随后因子计算和 Excel 生成约 2 分钟；网络和电脑性能不同会有差异。中途个别股票或板块接口失败时，程序会写入日志，并尽量继续跑完整体流程。
-
-### 6. 退出虚拟环境
-
-用完后如果想退出当前虚拟环境，执行：
+时间可通过 PowerShell 自定义：
 
 ```powershell
-deactivate
+powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18:00"
 ```
 
-退出后，命令行前面的 `(.venv)` 会消失。下次使用前再执行：
+## 管理面板
+
+### 市场概览
+
+展示市场评分、风险等级、上涨家数占比、指数涨跌、强势板块和 Top 10。
+
+### 观察名单
+
+在 Top 50 / Top 10 间切换，可按股票代码、名称、板块或命中策略搜索，并下载 Excel。
+
+### 策略管理
+
+支持四个预设组合，也可以逐项开关策略：
+
+| 组合 | 适用方向 |
+|---|---|
+| 均衡组合 | 同时观察突破、趋势、回踩、事件和板块信号 |
+| 突破优先 | 放量突破、海龟突破、平台收敛突破 |
+| 回踩优先 | 趋势回踩、突破后首次回踩、涨停震荡 |
+| 稳健趋势 | 低波 RPS、趋势转强和板块领涨 |
+
+相近策略按策略家族去重：同一家族只取最高分，避免多个相似突破信号重复加分。
+
+### 运行状态
+
+显示数据覆盖、最新交易日、日线数量、当前任务输出和最近运行记录。
+
+## 策略列表
+
+| 策略 | 家族 | 核心信号 |
+|---|---|---|
+| 均线放量突破 | 突破 | 均线多头、放量并突破 |
+| 海龟突破 | 突破 | 突破阶段高点 |
+| 平台缩量突破 | 突破 | 波动收敛后放量突破 |
+| RPS 强势突破 | 趋势 | RPS 居前并保持趋势 |
+| 低波 RPS 趋势 | 趋势 | 高相对强度、较低波动 |
+| 缩量回踩企稳 | 回踩 | 上升趋势中的缩量回踩 |
+| 趋势回踩转强 | 回踩 | 回踩均线后重新转强 |
+| 突破后首次回踩 | 回踩 | 突破后的第一次低风险确认 |
+| 涨停洗盘回踩 | 事件 | 历史涨停后换手整理 |
+| 板块共振领涨 | 板块 | 强板块中的高 RPS 领涨股 |
+
+详细规则见 [策略说明](docs/STRATEGIES.md)。
+
+## Excel 报告
+
+报告包含：
+
+1. 市场环境
+2. 强势板块
+3. Top50 观察名单
+4. Top10 重点关注
+5. 策略表现
+6. 风险过滤名单
+7. 原始评分明细
+
+原始明细默认隐藏，可在 Excel 中取消隐藏。表格包含冻结表头、筛选、条件颜色、数据条、统一列宽和风险说明。
+
+## GitHub Pages 手机查看
+
+GitHub Pages 只部署 `site/` 中的静态报告，不上传 SQLite、日志或 Excel。
+
+### 一次性设置
+
+1. 打开仓库 **Settings → Pages**
+2. 将 Source 设为 **GitHub Actions**
+3. 确认本机 Git 已登录并可执行 `git push`
+4. 双击 `install_scheduler_publish.bat`
+
+之后工作日任务成功时会：
+
+1. 更新数据并生成报告
+2. 只提交 `site/` 的变化
+3. 推送到 `main`
+4. 由 GitHub Actions 部署 Pages
+
+默认访问地址：
+
+[https://super-yyq.github.io/stock_selector/](https://super-yyq.github.io/stock_selector/)
+
+> GitHub Pages 通常是公开页面。静态报告中不要加入账户信息、交易记录或其他隐私内容。
+
+手动发布：
 
 ```powershell
-.\.venv\Scripts\activate
+.\.venv\Scripts\python.exe scripts\publish_pages.py
 ```
 
+## Docker 部署
 
-## 数据会占多少硬盘空间
+适合 NAS、Linux 服务器或长期运行的电脑：
 
-数据主要保存在本地 SQLite 文件：
-
-```text
-data/stock.db
+```bash
+docker compose up -d --build
 ```
 
-第一版默认不会拉取 A 股上市以来的所有历史数据，而是从 `config/strategy.yml` 里的 `data.start_date` 开始拉取。当前默认值是：
+打开 `http://127.0.0.1:8765`。数据、配置、报告、日志和站点目录都通过卷保留在宿主机。
+
+服务器公网访问时，应在 Caddy、Nginx 或其他反向代理中配置 HTTPS 和身份验证。默认 Compose 只绑定本机地址。
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+## Linux / macOS
+
+```bash
+chmod +x start.sh daily.sh
+./start.sh
+```
+
+每日运行：
+
+```bash
+./daily.sh
+```
+
+## 配置
+
+主要配置位于 `config/strategy.yml` 和 `config/stock_pool.yml`。
+
+常用参数：
 
 ```yaml
 data:
   provider: tdx
   start_date: "2023-01-01"
-  tdx_parallel_workers: 4
-  tdx_parallel_chunk_size: 50
-  tdx_timeout_seconds: 3
-  tdx_query_retries: 3
-  init_min_stock_coverage: 0.90
-  init_min_daily_rows: 100000
-  init_min_index_count: 3
   analysis_lookback_days: 240
-```
 
-`data.provider` 支持以下值：
-
-- `tdx`：默认值。连接多个通达信公开行情节点，免费、免账号，支持沪深北三市，不会调用 `baostock.login()`。
-- `akshare`：使用 AKShare / 东方财富逐只拉取。当前网络下可能出现 `RemoteDisconnected`，不建议用于全市场初始化。
-- `baostock`：只使用 baostock。已经出现黑名单时不要选择这个值。
-- `mixed`：兼容模式，先尝试 baostock；只有登录被黑名单或限流拦截时才切到 TDX。当前建议直接使用 `tdx`，避免无意义地再次登录 baostock。
-
-TDX 默认使用 4 个线程，每批 50 只股票。某个节点失败时会自动切换到其他节点；如果短时间失败股票过多，熔断器会停止空转并明确报错。`--init` 会记录每只股票的 TDX 完整同步状态，中断后再次执行同一命令可以准确续传。
-
-初始化结束后还会检查数据质量：股票覆盖率至少 90%、日线至少 10 万条、主要指数至少 3 个。没有达到这些条件时命令会失败并提示具体缺口，不会把空数据或少量数据当成初始化成功。
-
-如果已经看到 `黑名单用户，请与管理员联系`，不需要注册账号，也不要继续反复尝试 baostock。确认配置保持 `provider: tdx`，然后运行：
-
-```powershell
-python run_daily.py --init
-```
-
-从旧版 baostock 数据迁移时，TDX 会按股票逐只用未复权价格完整覆盖配置日期范围，并写入 `stock_sync_status` 断点状态。已有数据不会在开始时整库删除；中断后已完成的股票会被跳过。
-
-默认 TDX 模式不依赖东方财富行业接口；外部行业数据为空时，报告中的强势板块会使用本地市场板块聚合结果，不会再生成空白 sheet。
-
-也就是说，首次执行：
-
-```powershell
-python run_daily.py --init
-```
-
-会拉取从 2023-01-01 到运行日期之间的 A 股日线、主要指数日线和板块数据。
-
-大致空间估算：
-
-- 当前实测从 2023 年开始的全市场日线约占 600 MB；SQLite 索引、股票数量和运行日期会让体积有所变化。
-- 如果把 `start_date` 改到 2010 年甚至更早，数据库可能增长到数 GB。
-- `reports/` 里的 Excel 报告通常不大，但长期每天生成也会慢慢累积。
-- `logs/` 日志一般很小。
-
-如果你想少占空间，可以把起始日期调近一点，例如只保留最近一年：
-
-```yaml
-data:
-  start_date: "2025-01-01"
-```
-
-但注意：一些因子会用到 60 日历史数据，股票池过滤会用到上市天数和 20 日成交额，所以 `start_date` 不建议太近。比较稳妥的选择是保留至少 6 到 12 个月历史。
-
-日常运行：
-
-```powershell
-python run_daily.py
-```
-
-会尽量按本地数据库已有日期做增量更新：如果某只股票本地最新日期是 2026-06-20，而你运行到 2026-06-23，它只会请求 2026-06-21 到 2026-06-23 的数据，不会每天重复拉取全部历史。
-
-只有在你明确想清空所有本地数据并从零重建时，才删除数据库后执行 `--init`；普通中断续传不要删除：
-
-```powershell
-Remove-Item data\stock.db
-python run_daily.py --init
-```
-
-删除数据库会清空本地历史行情，下次初始化会重新拉取。
-
-## 每天盘后怎么用
-
-每天收盘后，打开 PowerShell：
-
-```powershell
-cd \仓库路径\
-.\.venv\Scripts\activate
-python run_daily.py
-```
-
-运行完成后查看：
-
-```text
-reports/YYYY-MM-DD_盘后选股报告.xlsx
-logs/run_YYYY-MM-DD.log
-```
-
-例如 2026-06-22 的报告会类似：
-
-```text
-reports/2026-06-22_盘后选股报告.xlsx
-logs/run_2026-06-22.log
-```
-
-## 指定日期重跑
-
-如果你想重跑某一天：
-
-```powershell
-python run_daily.py --date 2026-06-22
-```
-
-也可以使用兼容入口：
-
-```powershell
-python main.py --backfill
-python main.py --date 2026-06-22
-```
-
-## Excel 报告怎么看
-
-报告包含 6 个 sheet：
-
-1. `市场环境`：大盘环境、风险等级、上涨家数占比、涨停跌停数量等。
-2. `强势板块`：当日较强行业或板块。
-3. `Top50观察名单`：综合评分排名前 50 的观察股。
-4. `Top10重点关注`：从 Top50 中进一步筛出的重点观察股。
-5. `风险过滤名单`：因为 ST、停牌、成交额过低、上市时间不足等原因被过滤的股票。
-6. `原始评分明细`：所有参与评分股票的完整因子和分数。
-
-Top50 重点看这些列：
-
-- `总分`：综合得分，越高代表规则体系越认可。
-- `板块分`：所属行业或板块热度。
-- `股性分`：历史活跃度、涨停次数、RPS 等。
-- `量价分`：放量、突破、均线、相对强弱等。
-- `策略分`：是否命中内置策略。
-- `命中策略`：例如均线放量突破、海龟突破、RPS强势突破。
-- `入选理由`：为什么进入观察名单。
-- `风险提示`：追高、偏离均线、长上影、爆量滞涨等风险。
-
-Top10 重点看：
-
-- `重点关注理由`
-- `次日观察条件`
-- `风险提示`
-
-注意：报告不是买入建议。第二天还要结合大盘、板块、开盘位置、成交量和个人风控人工判断。
-
-## 策略筛选
-
-系统有一层类似 Sequoia-X 思路的可扩展规则策略筛选层。默认策略在 `config/strategy.yml` 的 `strategies.enabled` 中配置：
-
-- `ma_volume`：均线放量突破
-- `turtle_breakout`：海龟突破
-- `rps_breakout`：RPS强势突破
-- `pullback_stable`：缩量回踩企稳
-- `limit_up_shakeout`：涨停洗盘回踩
-
-策略命中会生成：
-
-- `strategy_score_raw`
-- `matched_strategies`
-- `strategy_reason`
-
-并按 `strategies.strategy_score_weight` 计入总分。
-
-示例：
-
-```yaml
-strategies:
-  enabled:
-    - ma_volume
-    - turtle_breakout
-    - rps_breakout
-    - pullback_stable
-    - limit_up_shakeout
-  strategy_score_weight: 15
-```
-
-如果你暂时只想看某一个策略，可以改成：
-
-```yaml
-strategies:
-  enabled:
-    - ma_volume
-  strategy_score_weight: 15
-```
-
-新增策略时，把策略类放到 `src/strategies/`，并在 `src/strategies/registry.py` 注册即可。
-
-## 常用配置
-
-配置文件主要有两个：
-
-```text
-config/strategy.yml
-config/stock_pool.yml
-```
-
-### 调整报告数量
-
-在 `config/strategy.yml` 中修改：
-
-```yaml
 report:
   top_observe: 50
   top_focus: 10
   output_dir: reports
+  site_dir: site
+  history_days: 90
+
+panel:
+  host: 127.0.0.1
+  port: 8765
+
+strategies:
+  profile: balanced
+  enabled:
+    - ma_volume
+    - turtle_breakout
+  strategy_score_weight: 15
 ```
 
-### 调整总分权重
-
-在 `config/strategy.yml` 中修改：
-
-```yaml
-scoring:
-  sector_score_weight: 25
-  stock_character_weight: 20
-  volume_price_weight: 25
-  relative_strength_weight: 15
-  market_adjust_weight: 10
-  risk_penalty_max: 20
-```
-
-### 调整股票池过滤条件
-
-在 `config/stock_pool.yml` 中修改：
+股票池和风险参数：
 
 ```yaml
 stock_pool:
@@ -342,191 +250,103 @@ stock_pool:
   exclude_suspended: true
 ```
 
-含义：
+修改策略开关优先使用面板；修改阈值和权重时编辑 YAML 后重新运行。
 
-- `min_list_days`：上市至少多少个交易日。
-- `min_price`：最低股价。
-- `min_avg_amount_20d`：最近 20 日平均成交额下限。
-- `exclude_st`：是否剔除 ST。
-- `exclude_suspended`：是否剔除停牌。
+## 数据与磁盘
 
-### 调整风险扣分
+- 默认保存 `start_date` 至今的全部 A 股日线
+- 日常运行只拉取缺失日期，不会重复下载全部历史
+- 默认配置通常占用约 0.5 至 1 GB，实际大小随起始日期和股票数量增长
+- 数据库路径：`data/stock.db`
+- 数据库、日志、Excel 和虚拟环境均已加入 `.gitignore`
+- 缩短历史范围可修改 `data.start_date`，但策略至少需要约 120 个交易日
 
-在 `config/stock_pool.yml` 中修改：
+## 命令行
 
-```yaml
-risk:
-  max_pct_chg_5d: 30
-  max_pct_chg_10d: 45
-  max_distance_ma20: 25
-  long_upper_shadow_ratio: 0.5
-  high_turnover_ratio: 25
-  high_volatility_20d: 0.08
+自动脚本之外，也支持直接运行：
+
+```powershell
+# 初始化 / 补全
+.\.venv\Scripts\python.exe run_daily.py --init
+
+# 每日增量
+.\.venv\Scripts\python.exe run_daily.py
+
+# 指定日期重跑
+.\.venv\Scripts\python.exe run_daily.py --date 2026-06-22
+
+# 启动面板
+.\.venv\Scripts\python.exe -m src.panel
 ```
 
-## 项目目录
+手动激活虚拟环境：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+退出虚拟环境：
+
+```powershell
+deactivate
+```
+
+## 项目结构
 
 ```text
-stock_selector/
-  config/
-    strategy.yml
-    stock_pool.yml
-  data/
-    stock.db
-  src/
-    fetch_data.py
-    database.py
-    build_pool.py
-    market_score.py
-    sector_score.py
-    stock_character.py
-    volume_price_score.py
-    risk_filter.py
-    scoring.py
-    report.py
-    run_daily.py
-    strategies/
-  reports/
-  logs/
-  run_daily.py
-  main.py
-  requirements.txt
+config/                 策略、数据源、股票池和风险配置
+data/                   SQLite 数据库
+src/
+  strategies/           策略实现与家族聚合
+  panel.py              本地管理面板 API
+  run_daily.py          每日任务编排
+  database.py           SQLite 与历史追踪
+  report.py             Excel 报告
+  web_report.py         静态网页报告
+web/                    面板与静态站点前端
+site/                   GitHub Pages 发布内容
+scripts/                启动、定时和发布脚本
+tests/                  自动化测试
+reports/                本地 Excel 报告
+logs/                   每日运行日志
 ```
 
-## 新会话或开发者怎么快速熟悉项目
+架构和扩展入口见 [架构说明](docs/ARCHITECTURE.md)。
 
-如果你下次新开 Codex 会话，或者让其他开发者接手，建议先让对方阅读根目录的 `AGENTS.md`。
+## 开发
 
-`AGENTS.md` 里整理了：
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
-- 项目定位和明确不做的事情
-- 用户常用命令
-- 每日选股主流程
-- 关键模块职责
-- 配置文件含义
-- 策略扩展方法
-- 常见修改路径
-- 测试命令和注意事项
+新增策略时：
 
-推荐阅读顺序：
+1. 在 `src/strategies/` 新建策略类
+2. 复用 `build_strategy_features` 的共享因子
+3. 在 `src/strategies/registry.py` 注册
+4. 为信号和家族聚合补充测试
+5. 更新 [策略说明](docs/STRATEGIES.md)
 
-1. `AGENTS.md`
-2. `README.md`
-3. `config/strategy.yml`
-4. `config/stock_pool.yml`
-5. `src/run_daily.py`
-6. 本次任务相关的 `src/*.py` 和 `tests/test_*.py`
-
-如果是新增或优化策略，优先看：
-
-- `src/strategies/registry.py`
-- `src/strategies/base.py`
-- `tests/test_strategies.py`
+仓库内的 `AGENTS.md` 记录了模块边界、关键约束和验证命令，方便后续新会话快速接手。
 
 ## 常见问题
 
-### 1. `python` 不是 3.12 怎么办
+**面板打不开**
 
-先试：
+确认 Python 3.12 可用，再次双击 `start.bat`。若端口被占用，修改 `panel.port`。
 
-```powershell
-py -3.12 --version
-```
+**首次初始化很久**
 
-如果能看到版本号，就用：
+全市场历史数据量较大。可以关闭面板后重新执行，已完成的股票会跳过或增量续传。
 
-```powershell
-py -3.12 -m venv .venv
-```
+**报告日期不是今天**
 
-如果找不到，需要先安装 Python 3.12。
+非交易日会使用数据库中的最新交易日，这是正常行为。
 
-### 2. 运行脚本时提示无法执行 activate
+**Pages 没有更新**
 
-可以临时允许当前 PowerShell 会话执行脚本：
+检查 GitHub 仓库的 Actions 页面、Pages Source 设置，以及本机 `git push` 权限。
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\activate
-```
+## 免责声明
 
-这个设置只影响当前窗口。
-
-### 3. 安装依赖很慢
-
-可以使用国内镜像：
-
-```powershell
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-### 4. 行情拉取失败或长时间没有进度
-
-先看日志：
-
-```text
-logs/run_YYYY-MM-DD.log
-```
-
-先确认 `config/strategy.yml` 中是：
-
-```yaml
-data:
-  provider: tdx
-```
-
-常见原因：
-
-- 当前通达信节点暂时不可用，程序会自动切换到备用节点。
-- 网络防火墙阻止了 7709 端口；默认节点列表同时包含 80 端口节点。
-- 指定日期早于股票上市日期，此时个别股票可能没有数据。
-- 使用了 `provider: baostock`，而当前网络已被 baostock 标记为黑名单。
-- 使用了 `provider: akshare`，东方财富主动断开连接。
-
-初始化被中断时直接重新执行即可，不要删除数据库：
-
-```powershell
-python run_daily.py --init
-```
-
-日志中的 `TDX stock daily progress` 会显示已处理股票数；结束时 `initialization health` 会显示覆盖率、总行数、指数数和最新交易日。
-
-### 5. 没有生成报告
-
-优先检查：
-
-- 是否已执行 `python run_daily.py --init`
-- `data/stock.db` 是否存在
-- `logs/` 里的日志是否有错误
-- 指定日期是否有本地行情数据
-
-### 6. 控制台中文显示乱码
-
-PowerShell 有时会显示乱码，但文件本身通常是 UTF-8。可以先执行：
-
-```powershell
-chcp 65001
-```
-
-如果只是控制台显示乱码，不一定影响 Excel 报告内容。
-
-## 开发和测试
-
-运行测试：
-
-```powershell
-.\.venv\Scripts\activate
-pytest
-```
-
-或：
-
-```powershell
-python -m pytest -v
-```
-
-## 风险说明
-
-这个系统只做盘后复盘和观察名单筛选，不是投资建议，也不做自动买卖。
-
-选出的股票只是辅助人工观察，需要结合第二天大盘、板块强弱、开盘位置、成交量和风险控制再决定是否操作。
+本项目输出的是规则筛选结果，仅用于个人学习、盘后复盘和次日人工观察。任何分数、排名、策略命中和历史收益都不代表未来表现。使用者应自行判断市场风险并承担决策责任。

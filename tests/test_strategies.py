@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.strategies.registry import run_enabled_strategies
+from src.strategies.registry import run_enabled_strategies, strategy_catalog
 
 
 def _strategy_daily() -> pd.DataFrame:
@@ -38,7 +38,7 @@ def _strategy_daily() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_run_enabled_strategies_aggregates_hits_and_caps_score() -> None:
+def test_run_enabled_strategies_aggregates_by_family() -> None:
     daily = _strategy_daily()
     factors = pd.DataFrame(
         [
@@ -59,7 +59,9 @@ def test_run_enabled_strategies_aggregates_hits_and_caps_score() -> None:
     assert "均线放量突破" in strong["matched_strategies"]
     assert "海龟突破" in strong["matched_strategies"]
     assert "RPS强势突破" in strong["matched_strategies"]
-    assert strong["strategy_score_raw"] == 100
+    assert strong["strategy_score_raw"] == 70
+    assert strong["strategy_hit_count"] == 3
+    assert strong["strategy_family_count"] == 2
     assert weak["strategy_score_raw"] == 0
 
 
@@ -71,3 +73,17 @@ def test_run_enabled_strategies_returns_zero_when_disabled() -> None:
 
     assert result.loc[0, "strategy_score_raw"] == 0
     assert result.loc[0, "matched_strategies"] == ""
+
+
+def test_strategy_catalog_contains_all_strategy_families() -> None:
+    catalog = strategy_catalog()
+
+    assert len(catalog) == 10
+    assert {item["key"] for item in catalog} >= {
+        "volatility_squeeze",
+        "trend_pullback_reversal",
+        "low_volatility_rps",
+        "first_pullback",
+        "sector_leader",
+    }
+    assert {item["family"] for item in catalog} >= {"breakout", "trend", "pullback", "event", "sector"}

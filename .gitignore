@@ -8,3 +8,5 @@ data/processed/
 logs/
 reports/
 .worktrees/
+data/*.db-*
+.env

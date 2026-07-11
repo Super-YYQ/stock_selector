@@ -19,6 +19,13 @@ report:
   top_observe: 50
   top_focus: 10
   output_dir: reports
+  site_dir: site
+  history_days: 90
+
+panel:
+  host: 127.0.0.1
+  port: 8765
+  open_browser: true
 
 features:
   enable_sector_score: true
@@ -40,4 +47,11 @@ strategies:
     - rps_breakout
     - pullback_stable
     - limit_up_shakeout
+    - volatility_squeeze
+    - trend_pullback_reversal
+    - low_volatility_rps
+    - first_pullback
+    - sector_leader
+  profile: balanced
   strategy_score_weight: 15
+  top_per_strategy: 20

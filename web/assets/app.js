@@ -1,0 +1,388 @@
+(function () {
+  "use strict";
+
+  var state = {
+    payload: null,
+    status: null,
+    strategies: null,
+    mode: "local",
+    listName: "top50",
+    search: ""
+  };
+
+  var viewMeta = {
+    overview: ["MARKET OVERVIEW", "市场概览"],
+    watchlist: ["WATCHLIST", "观察名单"],
+    strategies: ["STRATEGIES", "策略管理"],
+    system: ["SYSTEM STATUS", "运行状态"]
+  };
+
+  function byId(id) { return document.getElementById(id); }
+  function all(selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); }
+  function escapeHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+  function number(value, digits) {
+    var n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(digits == null ? 2 : digits) : "--";
+  }
+  function pct(value) {
+    var n = Number(value);
+    if (!Number.isFinite(n)) return "--";
+    return (n > 0 ? "+" : "") + n.toFixed(2) + "%";
+  }
+  function valueClass(value) {
+    var n = Number(value);
+    return n > 0 ? "positive" : (n < 0 ? "negative" : "");
+  }
+  function toast(message) {
+    var node = byId("toast");
+    node.textContent = message;
+    node.classList.add("show");
+    window.clearTimeout(toast.timer);
+    toast.timer = window.setTimeout(function () { node.classList.remove("show"); }, 2600);
+  }
+  function icons() {
+    if (window.lucide) window.lucide.createIcons();
+  }
+  async function request(path, options) {
+    var controller = new AbortController();
+    var timer = window.setTimeout(function () { controller.abort(); }, 10000);
+    try {
+      var response = await fetch(path, Object.assign({ cache: "no-store", signal: controller.signal }, options || {}));
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return await response.json();
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  async function load() {
+    setConnection("loading", "正在读取数据");
+    try {
+      state.payload = await request("/api/latest");
+      state.mode = "local";
+      document.body.classList.remove("static-mode");
+      await loadLocalState();
+    } catch (apiError) {
+      try {
+        state.payload = await request("data/latest.json");
+        state.mode = "static";
+        document.body.classList.add("static-mode");
+      } catch (staticError) {
+        setConnection("error", "暂无报告数据");
+        renderEmpty();
+        return;
+      }
+    }
+    renderAll();
+    setConnection("ok", state.mode === "local" ? "本地服务已连接" : "云端报告");
+  }
+
+  async function loadLocalState() {
+    var results = await Promise.allSettled([request("/api/status"), request("/api/strategies")]);
+    if (results[0].status === "fulfilled") state.status = results[0].value;
+    if (results[1].status === "fulfilled") state.strategies = results[1].value;
+  }
+
+  function setConnection(kind, label) {
+    var dot = byId("sidebar-status-dot");
+    dot.className = "status-dot" + (kind === "ok" ? " ok" : kind === "error" ? " error" : "");
+    byId("sidebar-status").textContent = label;
+  }
+
+  function renderEmpty() {
+    byId("report-date").textContent = "暂无报告";
+    byId("focus-table").innerHTML = '<tbody><tr><td class="empty-state">请先执行初始化或每日任务</td></tr></tbody>';
+  }
+
+  function renderAll() {
+    var payload = state.payload || {};
+    var market = payload.market || {};
+    var health = payload.health || {};
+    byId("report-date").textContent = payload.report_date || "--";
+    byId("generated-at").textContent = payload.generated_at ? "生成于 " + payload.generated_at.replace("T", " ") : "--";
+    byId("kpi-market").textContent = market.market_label || "--";
+    byId("kpi-risk").textContent = "风险 " + (market.risk_level || "--");
+    byId("kpi-score").textContent = number(market.market_score, 1);
+    byId("kpi-up-ratio").textContent = number(market.up_ratio, 1) + "%";
+    byId("kpi-limit").textContent = "涨停 " + (market.limit_up_count || 0) + " / 跌停 " + (market.limit_down_count || 0);
+    byId("kpi-coverage").textContent = number(Number(health.stock_coverage || 0) * 100, 1) + "%";
+    byId("kpi-symbols").textContent = (health.covered_symbols || health.latest_symbol_count || 0) + " 只股票";
+    byId("market-score-large").textContent = number(market.market_score, 1);
+    byId("market-score-bar").style.width = Math.max(0, Math.min(100, Number(market.market_score || 0) * 10)) + "%";
+    var risk = byId("market-risk-badge");
+    risk.textContent = "风险 " + (market.risk_level || "--");
+    risk.className = "risk-badge " + (market.risk_level === "高" ? "high" : market.risk_level === "低" ? "low" : "");
+    renderIndexes(market.index_changes || {});
+    renderSectors(payload.strong_sectors || []);
+    renderFocus(payload.top10 || []);
+    renderWatchlist();
+    renderStrategies();
+    renderPerformance(payload.strategy_performance || []);
+    renderSystem();
+    icons();
+  }
+
+  function renderIndexes(changes) {
+    var labels = { sh000001: "上证指数", sz399001: "深证成指", sz399006: "创业板指" };
+    byId("index-grid").innerHTML = Object.keys(labels).map(function (code) {
+      var change = Number(changes[code] || 0);
+      return '<div class="index-item"><span>' + labels[code] + '</span><strong class="' + valueClass(change) + '">' + pct(change) + '</strong></div>';
+    }).join("");
+  }
+
+  function renderSectors(items) {
+    byId("sector-count").textContent = items.length + " 个板块";
+    byId("sector-list").innerHTML = items.slice(0, 8).map(function (item) {
+      var score = Number(item.sector_score_raw || 0);
+      return '<div class="sector-item" title="' + escapeHtml(item.sector_reason || "") + '">' +
+        '<strong>' + escapeHtml(item.sector_name || item.industry || "--") + '</strong>' +
+        '<span class="sector-bar"><span style="width:' + Math.max(3, Math.min(100, score)) + '%"></span></span>' +
+        '<em class="' + valueClass(item.pct_chg) + '">' + pct(item.pct_chg) + '</em></div>';
+    }).join("") || '<div class="empty-state">暂无板块数据</div>';
+  }
+
+  function tableHtml(columns, rows) {
+    var head = "<thead><tr>" + columns.map(function (column) { return "<th>" + column.label + "</th>"; }).join("") + "</tr></thead>";
+    if (!rows.length) return head + '<tbody><tr><td class="empty-state" colspan="' + columns.length + '">暂无数据</td></tr></tbody>';
+    var body = rows.map(function (row) {
+      return "<tr>" + columns.map(function (column) {
+        var raw = row[column.key];
+        var display = column.format ? column.format(raw, row) : escapeHtml(raw);
+        var classes = column.className ? column.className(raw, row) : "";
+        return '<td class="' + classes + '">' + display + "</td>";
+      }).join("") + "</tr>";
+    }).join("");
+    return head + "<tbody>" + body + "</tbody>";
+  }
+
+  var focusColumns = [
+    { key: "rank", label: "#", className: function (v) { return "rank-cell " + (Number(v) <= 3 ? "top" : ""); } },
+    { key: "code", label: "代码", className: function () { return "code-cell"; }, format: function (v) { return escapeHtml(String(v || "").padStart(6, "0")); } },
+    { key: "name", label: "股票" },
+    { key: "total_score", label: "总分", className: function () { return "score-cell"; }, format: function (v) { return number(v, 2); } },
+    { key: "industry", label: "板块" },
+    { key: "pct_chg", label: "今日", className: valueClass, format: pct },
+    { key: "matched_strategies", label: "命中策略" },
+    { key: "next_day_condition", label: "次日观察", className: function () { return "reason-cell"; } }
+  ];
+
+  function renderFocus(rows) { byId("focus-table").innerHTML = tableHtml(focusColumns, rows); }
+
+  var watchColumns = [
+    { key: "rank", label: "#", className: function (v) { return "rank-cell " + (Number(v) <= 3 ? "top" : ""); } },
+    { key: "code", label: "代码", className: function () { return "code-cell"; }, format: function (v) { return escapeHtml(String(v || "").padStart(6, "0")); } },
+    { key: "name", label: "股票" },
+    { key: "total_score", label: "总分", className: function () { return "score-cell"; }, format: function (v) { return number(v, 2); } },
+    { key: "industry", label: "板块" },
+    { key: "pct_chg", label: "今日", className: valueClass, format: pct },
+    { key: "return_5d", label: "近5日", className: valueClass, format: pct },
+    { key: "amount_ratio", label: "量比", format: function (v) { return number(v, 2) + "x"; } },
+    { key: "rps20", label: "RPS20", format: function (v) { return number(v, 0); } },
+    { key: "matched_strategies", label: "命中策略" },
+    { key: "selection_reason", label: "入选理由", className: function () { return "reason-cell"; } },
+    { key: "risk_warning", label: "风险提示", className: function () { return "reason-cell"; } }
+  ];
+
+  function renderWatchlist() {
+    if (!state.payload) return;
+    var source = state.payload[state.listName] || [];
+    var query = state.search.trim().toLowerCase();
+    var rows = query ? source.filter(function (row) {
+      return [row.code, row.name, row.industry, row.matched_strategies].some(function (value) {
+        return String(value || "").toLowerCase().indexOf(query) >= 0;
+      });
+    }) : source;
+    byId("watchlist-heading").textContent = state.listName === "top10" ? "Top 10 重点关注" : "Top 50 观察名单";
+    byId("watchlist-count").textContent = rows.length + " 只股票";
+    byId("watchlist-table").innerHTML = tableHtml(watchColumns, rows);
+  }
+
+  function renderStrategies() {
+    var grid = byId("strategy-grid");
+    if (state.strategies && state.strategies.catalog) {
+      var enabled = new Set(state.strategies.enabled || []);
+      byId("strategy-profile").value = state.strategies.profile || "custom";
+      grid.innerHTML = state.strategies.catalog.map(function (item) {
+        var checked = enabled.has(item.key);
+        return '<article class="strategy-card ' + (checked ? "" : "disabled") + '" data-strategy-card="' + escapeHtml(item.key) + '">' +
+          '<span class="family-mark ' + escapeHtml(item.family) + '"></span><div><h3>' + escapeHtml(item.name) +
+          '</h3><p>' + escapeHtml(item.description) + ' · 基础分 ' + number(item.score, 0) + '</p></div>' +
+          '<label class="switch" title="启用或停用"><input type="checkbox" data-strategy="' + escapeHtml(item.key) + '" ' + (checked ? "checked" : "") + '><span></span></label></article>';
+      }).join("");
+      all("[data-strategy]").forEach(function (input) {
+        input.addEventListener("change", function () {
+          input.closest(".strategy-card").classList.toggle("disabled", !input.checked);
+          byId("strategy-profile").value = "custom";
+        });
+      });
+    } else {
+      var distribution = (state.payload && state.payload.strategy_distribution) || [];
+      grid.innerHTML = distribution.map(function (item) {
+        return '<article class="strategy-card"><span class="family-mark"></span><div><h3>' + escapeHtml(item.strategy) +
+          '</h3><p>本期 Top 50 命中 ' + item.count + ' 只</p></div></article>';
+      }).join("") || '<div class="empty-state">暂无策略命中记录</div>';
+    }
+  }
+
+  function renderPerformance(rows) {
+    var columns = [
+      { key: "strategy", label: "策略" },
+      { key: "sample_count", label: "样本" },
+      { key: "return_1d", label: "1日收益", className: valueClass, format: pct },
+      { key: "win_rate_1d", label: "1日胜率", format: function (v) { return v == null ? "--" : number(v, 1) + "%"; } },
+      { key: "return_5d", label: "5日收益", className: valueClass, format: pct },
+      { key: "win_rate_5d", label: "5日胜率", format: function (v) { return v == null ? "--" : number(v, 1) + "%"; } },
+      { key: "return_10d", label: "10日收益", className: valueClass, format: pct },
+      { key: "win_rate_10d", label: "10日胜率", format: function (v) { return v == null ? "--" : number(v, 1) + "%"; } }
+    ];
+    byId("performance-table").innerHTML = tableHtml(columns, rows);
+  }
+
+  function renderSystem() {
+    var health = (state.status && state.status.health) || (state.payload && state.payload.health) || {};
+    var coverage = Number(health.stock_coverage || 0);
+    var good = coverage >= 0.9 && Number(health.index_symbols || 0) >= 3;
+    var healthState = byId("health-state");
+    healthState.textContent = good ? "正常" : "需检查";
+    healthState.className = "health-state " + (good ? "good" : "bad");
+    var items = [
+      ["最新交易日", health.latest_trade_date || "--"],
+      ["股票覆盖", number(coverage * 100, 1) + "%"],
+      ["覆盖股票", health.covered_symbols || 0],
+      ["日线记录", Number(health.daily_rows || 0).toLocaleString("zh-CN")],
+      ["最新日股票", health.latest_symbol_count || 0],
+      ["指数数量", health.index_symbols || 0]
+    ];
+    byId("health-list").innerHTML = items.map(function (item) {
+      return "<div><dt>" + item[0] + "</dt><dd>" + escapeHtml(item[1]) + "</dd></div>";
+    }).join("");
+    if (state.status) {
+      renderRunner(state.status.runner || {});
+      renderRuns(state.status.runs || []);
+      var reports = state.status.reports || [];
+      var button = byId("download-report-button");
+      button.disabled = !reports.length;
+      button.dataset.href = reports.length ? reports[0].download_url : "";
+    }
+    byId("mode-note").textContent = state.mode === "static"
+      ? "公开页面只展示筛选结果，不包含本地数据库、日志和运行权限。"
+      : "服务仅监听本机地址；远程访问请通过 Docker 反向代理并配置访问控制。";
+  }
+
+  function renderRunner(runner) {
+    var running = Boolean(runner.running);
+    byId("run-state").textContent = running ? "运行中" : (runner.last_status || "空闲");
+    byId("run-state").className = "run-state" + (running ? " active" : "");
+    byId("run-output").textContent = runner.output || (running ? "任务正在执行" : "等待任务");
+    byId("run-button").disabled = running;
+    byId("quick-run-button").disabled = running;
+  }
+
+  function renderRuns(rows) {
+    var columns = [
+      { key: "started_at", label: "开始时间", format: function (v) { return escapeHtml(String(v || "").replace("T", " ")); } },
+      { key: "mode", label: "模式" },
+      { key: "report_date", label: "报告日期" },
+      { key: "status", label: "状态" },
+      { key: "message", label: "说明", className: function () { return "reason-cell"; } }
+    ];
+    byId("runs-table").innerHTML = tableHtml(columns, rows);
+  }
+
+  function switchView(name) {
+    all(".view").forEach(function (view) { view.classList.toggle("active", view.id === "view-" + name); });
+    all("[data-view]").forEach(function (button) { button.classList.toggle("active", button.dataset.view === name); });
+    byId("view-eyebrow").textContent = viewMeta[name][0];
+    byId("view-title").textContent = viewMeta[name][1];
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveStrategies() {
+    var enabled = all("[data-strategy]:checked").map(function (input) { return input.dataset.strategy; });
+    if (!enabled.length) { toast("至少保留一个启用策略"); return; }
+    var button = byId("save-strategies-button");
+    button.disabled = true;
+    try {
+      state.strategies = await request("/api/strategies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: enabled, profile: byId("strategy-profile").value })
+      });
+      toast("策略配置已保存");
+      renderStrategies();
+    } catch (error) {
+      toast("保存失败：" + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function startRun(mode) {
+    var body = { mode: mode || byId("run-mode").value };
+    var date = byId("run-date").value;
+    if (date) body.date = date;
+    try {
+      await request("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      toast("任务已启动");
+      await refreshStatus();
+      switchView("system");
+    } catch (error) {
+      toast("启动失败：" + error.message);
+    }
+  }
+
+  async function refreshStatus() {
+    if (state.mode !== "local") return;
+    try {
+      state.status = await request("/api/status");
+      renderSystem();
+      icons();
+    } catch (error) {
+      setConnection("error", "本地服务连接中断");
+    }
+  }
+
+  function bind() {
+    all("[data-view]").forEach(function (button) { button.addEventListener("click", function () { switchView(button.dataset.view); }); });
+    all("[data-goto]").forEach(function (button) { button.addEventListener("click", function () { switchView(button.dataset.goto); }); });
+    all("[data-list]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.listName = button.dataset.list;
+        all("[data-list]").forEach(function (item) { item.classList.toggle("active", item === button); });
+        renderWatchlist();
+      });
+    });
+    byId("stock-search").addEventListener("input", function (event) { state.search = event.target.value; renderWatchlist(); });
+    byId("refresh-button").addEventListener("click", load);
+    byId("save-strategies-button").addEventListener("click", saveStrategies);
+    byId("run-button").addEventListener("click", function () { startRun(); });
+    byId("quick-run-button").addEventListener("click", function () { startRun("daily"); });
+    byId("download-report-button").addEventListener("click", function (event) {
+      var href = event.currentTarget.dataset.href;
+      if (href) window.location.href = href;
+    });
+    byId("strategy-profile").addEventListener("change", function (event) {
+      if (!state.strategies || event.target.value === "custom") return;
+      var keys = new Set((state.strategies.profiles || {})[event.target.value] || []);
+      all("[data-strategy]").forEach(function (input) {
+        input.checked = keys.has(input.dataset.strategy);
+        input.closest(".strategy-card").classList.toggle("disabled", !input.checked);
+      });
+    });
+  }
+
+  bind();
+  icons();
+  load();
+  window.setInterval(function () {
+    if (state.mode === "local" && state.status && state.status.runner && state.status.runner.running) refreshStatus();
+  }, 3500);
+}());

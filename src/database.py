@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -77,7 +78,39 @@ CREATE TABLE IF NOT EXISTS stock_sync_status (
     PRIMARY KEY (code, provider, price_basis, start_date)
 );
 
+CREATE TABLE IF NOT EXISTS selection_history (
+    report_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    total_score REAL,
+    close REAL,
+    matched_strategies TEXT,
+    strategy_families TEXT,
+    return_1d REAL,
+    return_3d REAL,
+    return_5d REAL,
+    return_10d REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (report_date, code)
+);
+
+CREATE TABLE IF NOT EXISTS run_history (
+    run_id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    mode TEXT NOT NULL,
+    report_date TEXT,
+    status TEXT NOT NULL,
+    message TEXT,
+    report_path TEXT,
+    html_path TEXT,
+    published_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_stock_daily_trade_date ON stock_daily(trade_date);
+CREATE INDEX IF NOT EXISTS idx_selection_history_date ON selection_history(report_date);
+CREATE INDEX IF NOT EXISTS idx_run_history_started_at ON run_history(started_at);
 CREATE INDEX IF NOT EXISTS idx_stock_sync_lookup
 ON stock_sync_status(provider, price_basis, start_date, end_date);
 """
@@ -210,3 +243,206 @@ class Database:
             "latest_trade_date": latest_trade_date,
             "latest_symbol_count": latest_symbol_count,
         }
+
+    def save_selections(self, report_date: str, ranked: pd.DataFrame, top_n: int = 50) -> int:
+        if ranked.empty:
+            return 0
+        selected = ranked.head(top_n).copy()
+        now = datetime.now().isoformat(timespec="seconds")
+        defaults: dict[str, object] = {
+            "rank": 0,
+            "total_score": 0.0,
+            "close": 0.0,
+            "matched_strategies": "",
+            "strategy_families": "",
+        }
+        for column, default in defaults.items():
+            if column not in selected.columns:
+                selected[column] = default
+        selected["report_date"] = report_date
+        selected["created_at"] = now
+        selected["updated_at"] = now
+        columns = [
+            "report_date",
+            "code",
+            "rank",
+            "total_score",
+            "close",
+            "matched_strategies",
+            "strategy_families",
+            "created_at",
+            "updated_at",
+        ]
+        return self.upsert_dataframe("selection_history", selected[columns], ["report_date", "code"])
+
+    def refresh_selection_returns(self) -> int:
+        with self.connect() as conn:
+            selections = pd.read_sql_query(
+                """
+                SELECT report_date, code, close
+                FROM selection_history
+                WHERE close IS NOT NULL AND close > 0
+                """,
+                conn,
+            )
+            if selections.empty:
+                return 0
+            daily = pd.read_sql_query(
+                """
+                SELECT code, trade_date, close
+                FROM stock_daily
+                WHERE trade_date > ?
+                ORDER BY code, trade_date
+                """,
+                conn,
+                params=(str(selections["report_date"].min()),),
+            )
+        if daily.empty:
+            return 0
+
+        grouped = {code: frame.reset_index(drop=True) for code, frame in daily.groupby("code", sort=False)}
+        horizons = {1: "return_1d", 3: "return_3d", 5: "return_5d", 10: "return_10d"}
+        updates: list[tuple[object, ...]] = []
+        now = datetime.now().isoformat(timespec="seconds")
+        for row in selections.itertuples(index=False):
+            future = grouped.get(str(row.code))
+            if future is None:
+                continue
+            future = future[future["trade_date"] > str(row.report_date)].head(10)
+            values: dict[str, float | None] = {column: None for column in horizons.values()}
+            for horizon, column in horizons.items():
+                if len(future) >= horizon:
+                    values[column] = round((float(future.iloc[horizon - 1]["close"]) / float(row.close) - 1) * 100, 4)
+            if any(value is not None for value in values.values()):
+                updates.append(
+                    (
+                        values["return_1d"],
+                        values["return_3d"],
+                        values["return_5d"],
+                        values["return_10d"],
+                        now,
+                        str(row.report_date),
+                        str(row.code),
+                    )
+                )
+        if not updates:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                UPDATE selection_history
+                SET return_1d = COALESCE(?, return_1d),
+                    return_3d = COALESCE(?, return_3d),
+                    return_5d = COALESCE(?, return_5d),
+                    return_10d = COALESCE(?, return_10d),
+                    updated_at = ?
+                WHERE report_date = ? AND code = ?
+                """,
+                updates,
+            )
+            conn.commit()
+        return len(updates)
+
+    def strategy_performance(self) -> pd.DataFrame:
+        history = self.read_table("selection_history")
+        columns = [
+            "strategy",
+            "sample_count",
+            "return_1d",
+            "win_rate_1d",
+            "return_3d",
+            "win_rate_3d",
+            "return_5d",
+            "win_rate_5d",
+            "return_10d",
+            "win_rate_10d",
+        ]
+        if history.empty:
+            return pd.DataFrame(columns=columns)
+        records: list[dict[str, object]] = []
+        for row in history.itertuples(index=False):
+            names = [name for name in str(row.matched_strategies or "").split("、") if name]
+            for name in names:
+                record = {"strategy": name}
+                for horizon in (1, 3, 5, 10):
+                    record[f"return_{horizon}d"] = getattr(row, f"return_{horizon}d")
+                records.append(record)
+        if not records:
+            return pd.DataFrame(columns=columns)
+        expanded = pd.DataFrame(records)
+        rows: list[dict[str, object]] = []
+        for strategy, group in expanded.groupby("strategy", sort=False):
+            item: dict[str, object] = {"strategy": strategy, "sample_count": len(group)}
+            for horizon in (1, 3, 5, 10):
+                column = f"return_{horizon}d"
+                values = pd.to_numeric(group[column], errors="coerce").dropna()
+                item[column] = round(float(values.mean()), 2) if not values.empty else None
+                item[f"win_rate_{horizon}d"] = round(float(values.gt(0).mean() * 100), 2) if not values.empty else None
+            rows.append(item)
+        return pd.DataFrame(rows, columns=columns).sort_values(
+            ["return_5d", "sample_count"],
+            ascending=[False, False],
+            na_position="last",
+        ).reset_index(drop=True)
+
+    def start_run(self, run_id: str, mode: str, report_date: str | None) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        frame = pd.DataFrame(
+            [
+                {
+                    "run_id": run_id,
+                    "started_at": now,
+                    "finished_at": None,
+                    "mode": mode,
+                    "report_date": report_date,
+                    "status": "running",
+                    "message": "",
+                    "report_path": "",
+                    "html_path": "",
+                    "published_at": None,
+                }
+            ]
+        )
+        self.upsert_dataframe("run_history", frame, ["run_id"])
+
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        report_date: str | None = None,
+        message: str = "",
+        report_path: str = "",
+        html_path: str = "",
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE run_history
+                SET finished_at = ?, status = ?, report_date = COALESCE(?, report_date),
+                    message = ?, report_path = ?, html_path = ?
+                WHERE run_id = ?
+                """,
+                (
+                    datetime.now().isoformat(timespec="seconds"),
+                    status,
+                    report_date,
+                    message,
+                    report_path,
+                    html_path,
+                    run_id,
+                ),
+            )
+            conn.commit()
+
+    def recent_runs(self, limit: int = 20) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query(
+                """
+                SELECT * FROM run_history
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                conn,
+                params=(max(1, int(limit)),),
+            )

@@ -13,6 +13,11 @@ DEFAULT_ENABLED_STRATEGIES = [
     "rps_breakout",
     "pullback_stable",
     "limit_up_shakeout",
+    "volatility_squeeze",
+    "trend_pullback_reversal",
+    "low_volatility_rps",
+    "first_pullback",
+    "sector_leader",
 ]
 
 
@@ -40,6 +45,15 @@ class ReportConfig:
     top_observe: int = 50
     top_focus: int = 10
     output_dir: str = "reports"
+    site_dir: str = "site"
+    history_days: int = 90
+
+
+@dataclass(frozen=True)
+class PanelConfig:
+    host: str = "127.0.0.1"
+    port: int = 8765
+    open_browser: bool = True
 
 
 @dataclass(frozen=True)
@@ -62,7 +76,9 @@ class ScoringConfig:
 @dataclass(frozen=True)
 class StrategyConfig:
     enabled: list[str] = field(default_factory=lambda: list(DEFAULT_ENABLED_STRATEGIES))
+    profile: str = "balanced"
     strategy_score_weight: float = 15
+    top_per_strategy: int = 20
 
 
 @dataclass(frozen=True)
@@ -88,6 +104,7 @@ class RiskConfig:
 class AppConfig:
     data: DataConfig = field(default_factory=DataConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
+    panel: PanelConfig = field(default_factory=PanelConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     strategies: StrategyConfig = field(default_factory=StrategyConfig)
@@ -147,10 +164,18 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("min_avg_amount_20d must be non-negative")
     if config.report.top_observe < config.report.top_focus:
         raise ValueError("top_observe must be greater than or equal to top_focus")
+    if config.report.history_days < 1:
+        raise ValueError("report.history_days must be greater than 0")
+    if not 1 <= config.panel.port <= 65535:
+        raise ValueError("panel.port must be between 1 and 65535")
     if config.scoring.risk_penalty_max < 0:
         raise ValueError("risk_penalty_max must be non-negative")
     if config.strategies.strategy_score_weight < 0:
         raise ValueError("strategy_score_weight must be non-negative")
+    if config.strategies.profile not in {"balanced", "breakout", "pullback", "steady", "custom"}:
+        raise ValueError("strategies.profile must be one of: balanced, breakout, pullback, steady, custom")
+    if config.strategies.top_per_strategy < 1:
+        raise ValueError("strategies.top_per_strategy must be greater than 0")
 
 
 def load_config(config_dir: str | Path = "config") -> AppConfig:
@@ -161,6 +186,7 @@ def load_config(config_dir: str | Path = "config") -> AppConfig:
     config = AppConfig(
         data=DataConfig(**_section(strategy, "data")),
         report=ReportConfig(**_section(strategy, "report")),
+        panel=PanelConfig(**_section(strategy, "panel")),
         features=FeatureConfig(**_section(strategy, "features")),
         scoring=ScoringConfig(**_section(strategy, "scoring")),
         strategies=StrategyConfig(**_section(strategy, "strategies")),

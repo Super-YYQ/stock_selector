@@ -49,6 +49,18 @@ def test_write_excel_report_creates_required_sheets(tmp_path: Path) -> None:
 
     assert path.exists()
     workbook = load_workbook(path)
-    assert workbook.sheetnames == ["市场环境", "强势板块", "Top50观察名单", "Top10重点关注", "风险过滤名单", "原始评分明细"]
+    assert workbook.sheetnames == [
+        "市场环境",
+        "强势板块",
+        "Top50观察名单",
+        "Top10重点关注",
+        "策略表现",
+        "风险过滤名单",
+        "原始评分明细",
+    ]
+    assert workbook["市场环境"]["A1"].value == "2026-06-22 A股盘后观察"
     assert workbook["Top50观察名单"]["A1"].value == "排名"
     assert workbook["Top50观察名单"]["Q1"].value == "命中策略"
+    assert workbook["Top50观察名单"].freeze_panes == "A2"
+    assert workbook["Top50观察名单"]["A1"].fill.fgColor.rgb.endswith("164E4A")
+    assert workbook["原始评分明细"].sheet_state == "hidden"

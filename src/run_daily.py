@@ -6,6 +6,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 
@@ -28,6 +29,7 @@ from src.sector_score import build_market_board_daily, calculate_sector_scores, 
 from src.strategies.registry import run_enabled_strategies
 from src.stock_character import calculate_stock_character_scores
 from src.volume_price_score import calculate_volume_price_scores
+from src.web_report import build_report_payload, write_static_report
 
 INDEX_CODES = ("sh000001", "sz399001", "sz399006")
 
@@ -443,13 +445,25 @@ def run(argv: list[str] | None = None) -> Path | None:
     preliminary_date = args.date or date.today().strftime("%Y-%m-%d")
     setup_logging(preliminary_date)
     logger = logging.getLogger(__name__)
+    run_id = uuid4().hex
+    db: Database | None = None
+    run_started = False
+    report_path: Path | None = None
+    html_path: Path | None = None
+    final_report_date = preliminary_date
 
     try:
         config = load_config()
         db = Database(config.data.database)
         db.initialize()
+        db.start_run(run_id, "init" if args.init else "daily", preliminary_date)
+        run_started = True
 
-        existing_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
+        existing_basic = _safe_read(
+            db,
+            "stock_basic",
+            ["code", "name", "industry", "list_date", "is_st", "is_listed"],
+        )
         if args.init:
             logger.info("初始化模式已启动，开始更新免费数据源")
             update_market_data(db, config, preliminary_date, init=True)
@@ -458,12 +472,18 @@ def run(argv: list[str] | None = None) -> Path | None:
             logger.info("开始执行每日增量数据更新")
             update_market_data(db, config, preliminary_date, init=False)
 
-        stock_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
+        stock_basic = _safe_read(
+            db,
+            "stock_basic",
+            ["code", "name", "industry", "list_date", "is_st", "is_listed"],
+        )
         health = db.data_health()
         latest_trade_date = health.get("latest_trade_date")
         report_date = resolve_report_date(args.date, str(latest_trade_date) if latest_trade_date else None)
+        final_report_date = report_date
         analysis_start = (
-            datetime.strptime(report_date, "%Y-%m-%d").date() - timedelta(days=config.data.analysis_lookback_days)
+            datetime.strptime(report_date, "%Y-%m-%d").date()
+            - timedelta(days=config.data.analysis_lookback_days)
         ).strftime("%Y-%m-%d")
         stock_daily = db.read_table_between("stock_daily", "trade_date", analysis_start, report_date)
         index_daily = db.read_table_between("index_daily", "trade_date", analysis_start, report_date)
@@ -474,26 +494,36 @@ def run(argv: list[str] | None = None) -> Path | None:
             sector_daily = build_market_board_daily(stock_basic, stock_daily)
 
         if stock_basic.empty or stock_daily.empty:
-            logger.warning("本地数据库暂无足够行情数据，请先完成数据初始化或导入历史行情。")
+            message = "本地数据库暂无足够行情数据，请先完成数据初始化或导入历史行情。"
+            logger.warning(message)
+            db.finish_run(run_id, "failed", report_date=report_date, message=message)
             return None
 
         eligible, filtered = build_stock_pool(stock_basic, stock_daily, report_date, config.stock_pool)
         market = calculate_market_score(index_daily, stock_daily, report_date)
-        sector_scores, strong_sectors = calculate_sector_scores(sector_daily, stock_basic, stock_daily, report_date)
+        sector_scores, strong_sectors = calculate_sector_scores(
+            sector_daily,
+            stock_basic,
+            stock_daily,
+            report_date,
+        )
         character = calculate_stock_character_scores(stock_daily, report_date)
         volume_price = calculate_volume_price_scores(stock_daily, report_date)
 
         latest = _latest_stock_rows(stock_daily, report_date)
         factor_columns = ["code", "pct_chg", "turnover_rate"]
-        factors = eligible.drop(columns=[column for column in factor_columns[1:] if column in eligible.columns]).merge(
-            latest[factor_columns],
-            on="code",
-            how="left",
-        )
+        factors = eligible.drop(
+            columns=[column for column in factor_columns[1:] if column in eligible.columns]
+        ).merge(latest[factor_columns], on="code", how="left")
         factors = factors.merge(sector_scores, on=["code", "industry"], how="left")
         factors = factors.merge(character, on="code", how="left")
         factors = factors.merge(volume_price, on="code", how="left")
-        strategy_scores = run_enabled_strategies(stock_daily, report_date, factors, config.strategies.enabled)
+        strategy_scores = run_enabled_strategies(
+            stock_daily,
+            report_date,
+            factors,
+            config.strategies.enabled,
+        )
         factors = factors.merge(strategy_scores, on="code", how="left")
         factors = _add_risk_inputs(factors)
         risk = calculate_risk_penalties(factors, config.risk, config.scoring)
@@ -505,16 +535,69 @@ def run(argv: list[str] | None = None) -> Path | None:
             config.report,
             config.strategies.strategy_score_weight,
         )
-        report_path = write_excel_report(config.report.output_dir, report_date, market, strong_sectors, top50, top10, ranked, filtered)
+
+        db.save_selections(report_date, ranked, config.report.top_observe)
+        updated_returns = db.refresh_selection_returns()
+        logger.info("已更新 %s 条历史入选收益", updated_returns)
+        performance = db.strategy_performance()
+        health = db.data_health()
+
+        report_path = write_excel_report(
+            config.report.output_dir,
+            report_date,
+            market,
+            strong_sectors,
+            top50,
+            top10,
+            ranked,
+            filtered,
+            strategy_performance=performance,
+            health=health,
+        )
+        payload = build_report_payload(
+            report_date,
+            market,
+            strong_sectors,
+            top50,
+            top10,
+            performance,
+            health,
+        )
+        html_path = write_static_report(
+            config.report.site_dir,
+            payload,
+            history_days=config.report.history_days,
+        )
+        db.finish_run(
+            run_id,
+            "success",
+            report_date=report_date,
+            message=f"生成 Top{len(top50)} 观察名单和 Top{len(top10)} 重点关注",
+            report_path=str(report_path),
+            html_path=str(html_path),
+        )
 
         print(f"今日市场环境：{market['market_label']}")
         print(f"市场风险等级：{market['risk_level']}")
         print(f"上涨家数占比：{market['up_ratio']}%")
         print(f"涨停家数：{market['limit_up_count']}")
         print(f"跌停家数：{market['limit_down_count']}")
-        print(f"报告路径：{report_path}")
+        print(f"Excel 报告：{report_path}")
+        print(f"网页报告：{html_path}")
         return report_path
-    except Exception:
+    except Exception as exc:
+        if db is not None and run_started:
+            try:
+                db.finish_run(
+                    run_id,
+                    "failed",
+                    report_date=final_report_date,
+                    message=str(exc)[:2000],
+                    report_path=str(report_path or ""),
+                    html_path=str(html_path or ""),
+                )
+            except Exception:
+                logger.exception("任务状态写入失败")
         logger.exception("每日任务执行失败")
         raise
 

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#164e4a">
+  <title>A股盘后选股助手</title>
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">A</span>
+        <span><strong>盘后选股助手</strong><small>Stock Selector</small></span>
+      </div>
+      <nav class="nav-list" aria-label="主导航">
+        <button class="nav-item active" data-view="overview"><i data-lucide="layout-dashboard"></i><span>市场概览</span></button>
+        <button class="nav-item" data-view="watchlist"><i data-lucide="list-filter"></i><span>观察名单</span></button>
+        <button class="nav-item" data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>策略管理</span></button>
+        <button class="nav-item" data-view="system"><i data-lucide="activity"></i><span>运行状态</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="status-dot" id="sidebar-status-dot"></span>
+        <span id="sidebar-status">正在读取数据</span>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="view-eyebrow">MARKET OVERVIEW</p>
+          <h1 id="view-title">市场概览</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="report-date" id="report-date">--</span>
+          <button class="icon-button" id="refresh-button" title="刷新数据" aria-label="刷新数据"><i data-lucide="refresh-cw"></i></button>
+          <button class="primary-button local-only" id="quick-run-button"><i data-lucide="play"></i><span>执行盘后任务</span></button>
+        </div>
+      </header>
+
+      <main>
+        <section class="view active" id="view-overview">
+          <div class="kpi-band">
+            <article class="kpi">
+              <span>市场环境</span><strong id="kpi-market">--</strong><small id="kpi-risk">风险 --</small>
+            </article>
+            <article class="kpi">
+              <span>市场评分</span><strong id="kpi-score">--</strong><small>满分 10</small>
+            </article>
+            <article class="kpi">
+              <span>上涨家数占比</span><strong id="kpi-up-ratio">--</strong><small id="kpi-limit">涨停 -- / 跌停 --</small>
+            </article>
+            <article class="kpi">
+              <span>数据覆盖</span><strong id="kpi-coverage">--</strong><small id="kpi-symbols">-- 只股票</small>
+            </article>
+          </div>
+
+          <div class="overview-grid">
+            <section class="content-section market-section">
+              <div class="section-heading">
+                <div><p class="section-kicker">MARKET</p><h2>指数与市场温度</h2></div>
+                <span class="risk-badge" id="market-risk-badge">--</span>
+              </div>
+              <div class="market-score-row">
+                <div class="score-number"><strong id="market-score-large">--</strong><span>/ 10</span></div>
+                <div class="score-track"><span id="market-score-bar"></span></div>
+              </div>
+              <div class="index-grid" id="index-grid"></div>
+            </section>
+
+            <section class="content-section">
+              <div class="section-heading">
+                <div><p class="section-kicker">SECTORS</p><h2>强势板块</h2></div>
+                <span class="muted" id="sector-count">--</span>
+              </div>
+              <div class="sector-list" id="sector-list"></div>
+            </section>
+          </div>
+
+          <section class="content-section table-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">FOCUS</p><h2>Top 10 重点关注</h2></div>
+              <button class="text-button" data-goto="watchlist">查看完整名单 <i data-lucide="arrow-right"></i></button>
+            </div>
+            <div class="table-wrap"><table id="focus-table"></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-watchlist">
+          <div class="filter-bar">
+            <div class="segmented" role="tablist">
+              <button class="active" data-list="top50">Top 50</button>
+              <button data-list="top10">Top 10</button>
+            </div>
+            <label class="search-box"><i data-lucide="search"></i><input id="stock-search" placeholder="代码、名称或板块" autocomplete="off"></label>
+            <button class="secondary-button local-only" id="download-report-button"><i data-lucide="file-spreadsheet"></i><span>Excel 报告</span></button>
+          </div>
+          <section class="content-section table-section watchlist-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">RANKING</p><h2 id="watchlist-heading">Top 50 观察名单</h2></div>
+              <span class="muted" id="watchlist-count">--</span>
+            </div>
+            <div class="table-wrap"><table id="watchlist-table"></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-strategies">
+          <section class="strategy-toolbar local-only">
+            <div>
+              <p class="section-kicker">STRATEGY PROFILE</p>
+              <h2>策略组合</h2>
+            </div>
+            <div class="strategy-actions">
+              <select id="strategy-profile" aria-label="策略组合">
+                <option value="balanced">均衡组合</option>
+                <option value="breakout">突破优先</option>
+                <option value="pullback">回踩优先</option>
+                <option value="steady">稳健趋势</option>
+                <option value="custom">自定义</option>
+              </select>
+              <button class="primary-button" id="save-strategies-button"><i data-lucide="save"></i><span>保存策略</span></button>
+            </div>
+          </section>
+
+          <div class="strategy-grid" id="strategy-grid"></div>
+
+          <section class="content-section table-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">TRACK RECORD</p><h2>策略历史表现</h2></div>
+              <span class="muted">收益按入选日收盘价计算</span>
+            </div>
+            <div class="table-wrap"><table id="performance-table"></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-system">
+          <div class="system-grid">
+            <section class="content-section">
+              <div class="section-heading"><div><p class="section-kicker">DATA HEALTH</p><h2>数据健康</h2></div><span class="health-state" id="health-state">--</span></div>
+              <dl class="health-list" id="health-list"></dl>
+            </section>
+            <section class="content-section local-only">
+              <div class="section-heading"><div><p class="section-kicker">RUNNER</p><h2>任务执行</h2></div><span class="run-state" id="run-state">空闲</span></div>
+              <div class="run-controls">
+                <label><span>运行模式</span><select id="run-mode"><option value="daily">每日增量</option><option value="init">首次初始化 / 补全</option></select></label>
+                <label><span>指定日期</span><input id="run-date" type="date"></label>
+                <button class="primary-button" id="run-button"><i data-lucide="play"></i><span>开始执行</span></button>
+              </div>
+              <pre class="run-output" id="run-output">等待任务</pre>
+            </section>
+          </div>
+          <section class="content-section table-section local-only">
+            <div class="section-heading"><div><p class="section-kicker">RUN HISTORY</p><h2>最近任务</h2></div></div>
+            <div class="table-wrap"><table id="runs-table"></table></div>
+          </section>
+          <section class="content-section public-note">
+            <i data-lucide="shield-check"></i>
+            <p id="mode-note">页面只展示盘后观察结果，不包含数据库、日志或交易功能。</p>
+          </section>
+        </section>
+      </main>
+      <footer><span id="generated-at">--</span><span>仅供盘后复盘，不构成投资建议</span></footer>
+    </div>
+  </div>
+
+  <nav class="mobile-nav" aria-label="移动端导航">
+    <button class="active" data-view="overview"><i data-lucide="layout-dashboard"></i><span>概览</span></button>
+    <button data-view="watchlist"><i data-lucide="list-filter"></i><span>名单</span></button>
+    <button data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>策略</span></button>
+    <button data-view="system"><i data-lucide="activity"></i><span>状态</span></button>
+  </nav>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="assets/lucide.min.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
