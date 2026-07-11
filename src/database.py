@@ -64,6 +64,22 @@ CREATE TABLE IF NOT EXISTS run_metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS stock_sync_status (
+    code TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    price_basis TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (code, provider, price_basis, start_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_daily_trade_date ON stock_daily(trade_date);
+CREATE INDEX IF NOT EXISTS idx_stock_sync_lookup
+ON stock_sync_status(provider, price_basis, start_date, end_date);
 """
 
 
@@ -113,3 +129,84 @@ class Database:
     def read_table(self, table: str) -> pd.DataFrame:
         with self.connect() as conn:
             return pd.read_sql_query(f"SELECT * FROM {table}", conn)
+
+    def mark_all_stocks_unlisted(self) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE stock_basic SET is_listed = 0")
+            conn.commit()
+
+    def latest_dates(self, table: str, key_column: str, date_column: str = "trade_date") -> dict[str, str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT {key_column}, MAX({date_column}) AS latest_date FROM {table} GROUP BY {key_column}"
+            ).fetchall()
+        return {
+            str(row[key_column]): str(row["latest_date"])
+            for row in rows
+            if row[key_column] is not None and row["latest_date"] is not None
+        }
+
+    def read_table_between(self, table: str, date_column: str, start_date: str, end_date: str) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query(
+                f"SELECT * FROM {table} WHERE {date_column} >= ? AND {date_column} <= ?",
+                conn,
+                params=(start_date, end_date),
+            )
+
+    def get_synced_codes(
+        self,
+        provider: str,
+        price_basis: str,
+        start_date: str,
+        end_date: str | None = None,
+    ) -> set[str]:
+        sql = """
+            SELECT code
+            FROM stock_sync_status
+            WHERE provider = ? AND price_basis = ? AND start_date = ?
+        """
+        params: list[object] = [provider, price_basis, start_date]
+        if end_date is not None:
+            sql += " AND end_date >= ?"
+            params.append(end_date)
+        with self.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return {str(row["code"]) for row in rows}
+
+    def data_health(self) -> dict[str, object]:
+        with self.connect() as conn:
+            active_symbols = int(
+                conn.execute("SELECT COUNT(*) FROM stock_basic WHERE COALESCE(is_listed, 1) = 1").fetchone()[0]
+            )
+            covered_symbols = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT d.code)
+                    FROM stock_daily d
+                    JOIN stock_basic b ON b.code = d.code
+                    WHERE COALESCE(b.is_listed, 1) = 1
+                    """
+                ).fetchone()[0]
+            )
+            daily_rows = int(conn.execute("SELECT COUNT(*) FROM stock_daily").fetchone()[0])
+            index_symbols = int(conn.execute("SELECT COUNT(DISTINCT index_code) FROM index_daily").fetchone()[0])
+            latest_trade_date = conn.execute("SELECT MAX(trade_date) FROM stock_daily").fetchone()[0]
+            latest_symbol_count = 0
+            if latest_trade_date:
+                latest_symbol_count = int(
+                    conn.execute(
+                        "SELECT COUNT(DISTINCT code) FROM stock_daily WHERE trade_date = ?",
+                        (latest_trade_date,),
+                    ).fetchone()[0]
+                )
+        coverage = covered_symbols / active_symbols if active_symbols else 0.0
+        return {
+            "active_symbols": active_symbols,
+            "covered_symbols": covered_symbols,
+            "stock_coverage": coverage,
+            "daily_rows": daily_rows,
+            "index_symbols": index_symbols,
+            "latest_trade_date": latest_trade_date,
+            "latest_symbol_count": latest_symbol_count,
+        }

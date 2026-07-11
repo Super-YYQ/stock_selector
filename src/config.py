@@ -18,9 +18,17 @@ DEFAULT_ENABLED_STRATEGIES = [
 
 @dataclass(frozen=True)
 class DataConfig:
-    provider: str = "mixed"
+    provider: str = "tdx"
     database: str = "data/stock.db"
     start_date: str = "2023-01-01"
+    tdx_parallel_workers: int = 4
+    tdx_parallel_chunk_size: int = 50
+    tdx_timeout_seconds: float = 3.0
+    tdx_query_retries: int = 3
+    init_min_stock_coverage: float = 0.90
+    init_min_daily_rows: int = 100000
+    init_min_index_count: int = 3
+    analysis_lookback_days: int = 240
     baostock_query_retries: int = 3
     baostock_reconnect_interval: int = 200
     baostock_parallel_workers: int = 2
@@ -105,6 +113,24 @@ def _section(raw: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def _validate(config: AppConfig) -> None:
+    if config.data.provider.strip().lower() not in {"tdx", "akshare", "eastmoney", "baostock", "mixed", "auto"}:
+        raise ValueError("provider must be one of: tdx, akshare, baostock, mixed, auto")
+    if config.data.tdx_parallel_workers < 1:
+        raise ValueError("tdx_parallel_workers must be greater than 0")
+    if config.data.tdx_parallel_chunk_size < 1:
+        raise ValueError("tdx_parallel_chunk_size must be greater than 0")
+    if config.data.tdx_timeout_seconds <= 0:
+        raise ValueError("tdx_timeout_seconds must be greater than 0")
+    if config.data.tdx_query_retries < 1:
+        raise ValueError("tdx_query_retries must be greater than 0")
+    if not 0 < config.data.init_min_stock_coverage <= 1:
+        raise ValueError("init_min_stock_coverage must be in (0, 1]")
+    if config.data.init_min_daily_rows < 1:
+        raise ValueError("init_min_daily_rows must be greater than 0")
+    if config.data.init_min_index_count < 1:
+        raise ValueError("init_min_index_count must be greater than 0")
+    if config.data.analysis_lookback_days < 120:
+        raise ValueError("analysis_lookback_days must be at least 120")
     if config.data.baostock_query_retries < 1:
         raise ValueError("baostock_query_retries must be greater than 0")
     if config.data.baostock_reconnect_interval < 1:

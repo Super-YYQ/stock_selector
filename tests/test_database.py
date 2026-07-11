@@ -11,7 +11,7 @@ def test_database_creates_core_tables(tmp_path: Path) -> None:
 
     tables = db.list_tables()
 
-    assert {"stock_basic", "stock_daily", "index_daily", "sector_daily", "run_metadata"} <= tables
+    assert {"stock_basic", "stock_daily", "index_daily", "sector_daily", "run_metadata", "stock_sync_status"} <= tables
 
 
 def test_upsert_stock_daily_replaces_same_code_and_date(tmp_path: Path) -> None:
@@ -43,3 +43,22 @@ def test_upsert_stock_daily_replaces_same_code_and_date(tmp_path: Path) -> None:
     assert len(stored) == 1
     assert stored.loc[0, "close"] == 10.8
     assert stored.loc[0, "amount"] == 108000
+
+
+def test_mark_all_stocks_unlisted_allows_fresh_basic_list_to_reactivate(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    basic = pd.DataFrame(
+        [
+            {"code": "000001", "name": "A", "is_listed": 1},
+            {"code": "000002", "name": "B", "is_listed": 1},
+        ]
+    )
+    db.upsert_dataframe("stock_basic", basic, ["code"])
+
+    db.mark_all_stocks_unlisted()
+    db.upsert_dataframe("stock_basic", basic.iloc[[0]], ["code"])
+
+    stored = db.read_table("stock_basic").set_index("code")
+    assert stored.loc["000001", "is_listed"] == 1
+    assert stored.loc["000002", "is_listed"] == 0

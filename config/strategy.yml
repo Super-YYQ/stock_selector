@@ -1,7 +1,15 @@
 data:
-  provider: mixed
+  provider: tdx
   database: data/stock.db
   start_date: "2023-01-01"
+  tdx_parallel_workers: 4
+  tdx_parallel_chunk_size: 50
+  tdx_timeout_seconds: 3
+  tdx_query_retries: 3
+  init_min_stock_coverage: 0.90
+  init_min_daily_rows: 100000
+  init_min_index_count: 3
+  analysis_lookback_days: 240
   baostock_query_retries: 3
   baostock_reconnect_interval: 200
   baostock_parallel_workers: 2

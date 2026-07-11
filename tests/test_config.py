@@ -16,6 +16,10 @@ data:
   baostock_reconnect_interval: 150
   baostock_parallel_workers: 2
   baostock_parallel_chunk_size: 7
+  tdx_parallel_workers: 3
+  tdx_parallel_chunk_size: 25
+  init_min_stock_coverage: 0.8
+  init_min_daily_rows: 50000
 report:
   top_observe: 20
 features:
@@ -43,11 +47,15 @@ risk:
 
     assert isinstance(config, AppConfig)
     assert config.data.database == "custom/stock.db"
-    assert config.data.provider == "mixed"
+    assert config.data.provider == "tdx"
     assert config.data.baostock_query_retries == 4
     assert config.data.baostock_reconnect_interval == 150
     assert config.data.baostock_parallel_workers == 2
     assert config.data.baostock_parallel_chunk_size == 7
+    assert config.data.tdx_parallel_workers == 3
+    assert config.data.tdx_parallel_chunk_size == 25
+    assert config.data.init_min_stock_coverage == 0.8
+    assert config.data.init_min_daily_rows == 50000
     assert config.report.top_observe == 20
     assert config.report.top_focus == 10
     assert config.features.enable_sector_score is False
@@ -76,3 +84,6 @@ def test_data_config_defaults_use_conservative_parallelism() -> None:
     config = AppConfig()
 
     assert config.data.baostock_parallel_workers == 2
+    assert config.data.tdx_parallel_workers == 4
+    assert config.data.tdx_parallel_chunk_size == 50
+    assert config.data.provider == "tdx"

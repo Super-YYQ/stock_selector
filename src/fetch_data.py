@@ -478,3 +478,13 @@ def fetch_stock_daily_parallel(
         for future in as_completed(futures):
             rows, failures, requested = future.result()
             yield pd.DataFrame(rows), failures, requested
+
+
+from src.tdx_fetcher import (  # noqa: E402,F401
+    TDX_PRICE_BASIS,
+    TdxDataFetcher,
+    fetch_tdx_stock_daily_parallel,
+    normalize_tdx_index_daily,
+    normalize_tdx_stock_daily,
+    tdx_market,
+)

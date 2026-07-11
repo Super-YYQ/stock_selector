@@ -263,10 +263,13 @@ python -m pytest -v
 - 本地数据主要在 `data/stock.db`，默认不提交。
 - 修改数据拉取范围时，优先调整 `config/strategy.yml` 的 `data.start_date`，并同步更新 README。
 
-## Sequoia-X Data Fetching Notes
+## Data Fetching and Blacklist Notes
 
-- Sequoia-X still uses baostock for its data layer; baostock requires `bs.login()` before queries. This is a free API session, not a user account login.
-- Its stability pattern is retry single-symbol failures, skip repeated failures, and periodically logout/login during long backfills.
-- This repo mirrors that pattern with `data.baostock_query_retries` and `data.baostock_reconnect_interval`. Defaults: 3 retries, reconnect after 200 baostock queries, 2 parallel workers, and 20 symbols per worker batch. Init runs resume from local `stock_daily` max dates unless the user deletes `data/stock.db` for a clean rebuild.
-- `data.provider: mixed` means baostock is tried first, but baostock blacklist/rate-limit login failures fall back to `AkshareDataFetcher`. `data.provider: akshare` skips baostock entirely. AKShare stock daily updates intentionally run sequentially through the existing update loop.
-- AKShare stock basic data does not reliably include IPO/list dates, so `build_stock_pool` falls back to the earliest local daily row when enforcing `stock_pool.min_list_days`.
+- The default provider is `tdx`. It uses `src/tdx_fetcher.py`, public TDX quote nodes, four worker threads, host failover, and a high-failure circuit breaker. It does not create a baostock session.
+- Treat `provider: baostock` as an explicit opt-in. Never add an automatic baostock retry loop after a blacklist response. `mixed` exists only for compatibility and falls back from a blocked baostock login to TDX.
+- TDX stock prices are stored unadjusted. `stock_sync_status` tracks the `tdx_unadjusted_v1` basis per symbol so an interrupted migration cannot silently mix baostock-adjusted and TDX-unadjusted rows.
+- On `--init`, symbols without a complete TDX sync marker are fetched from `data.start_date`; completed symbols resume incrementally. Do not delete `data/stock.db` to resume.
+- `validate_initialization()` is the success gate. Coverage, daily-row, and index thresholds are configured under `data.init_min_*`.
+- Update logic must query latest dates in SQLite. Report calculations intentionally load only `data.analysis_lookback_days`, not the entire historical table.
+- AKShare remains useful for the compact stock code/name list. Its EastMoney historical endpoint is not the default because it can close connections during large backfills.
+- Sequoia-X still uses baostock. Its login/reconnect approach is reference context, not the current default architecture here.

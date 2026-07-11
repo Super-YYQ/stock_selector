@@ -12,12 +12,19 @@ import pandas as pd
 from src.build_pool import build_stock_pool
 from src.config import AppConfig, load_config
 from src.database import Database
-from src.fetch_data import AkshareDataFetcher, DataFetcher, fetch_stock_daily_parallel
+from src.fetch_data import (
+    TDX_PRICE_BASIS,
+    AkshareDataFetcher,
+    DataFetcher,
+    TdxDataFetcher,
+    fetch_stock_daily_parallel,
+    fetch_tdx_stock_daily_parallel,
+)
 from src.market_score import calculate_market_score
 from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
 from src.scoring import build_ranked_results
-from src.sector_score import calculate_sector_scores
+from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
 from src.strategies.registry import run_enabled_strategies
 from src.stock_character import calculate_stock_character_scores
 from src.volume_price_score import calculate_volume_price_scores
@@ -114,11 +121,21 @@ def _is_baostock_rate_limit_error(error: object) -> bool:
 
 
 def _data_provider(config: AppConfig) -> str:
-    return (config.data.provider or "mixed").strip().lower()
+    return (config.data.provider or "tdx").strip().lower()
+
+
+def _create_tdx_fetcher(config: AppConfig) -> TdxDataFetcher:
+    return TdxDataFetcher(
+        config.data.start_date,
+        timeout_seconds=config.data.tdx_timeout_seconds,
+        query_retries=config.data.tdx_query_retries,
+    )
 
 
 def _create_configured_fetcher(config: AppConfig) -> Any:
     provider = _data_provider(config)
+    if provider == "tdx":
+        return _create_tdx_fetcher(config)
     if provider in {"akshare", "eastmoney"}:
         return AkshareDataFetcher(config.data.start_date)
     return DataFetcher(
@@ -128,7 +145,7 @@ def _create_configured_fetcher(config: AppConfig) -> Any:
     )
 
 
-def _allows_akshare_fallback(config: AppConfig) -> bool:
+def _allows_tdx_fallback(config: AppConfig) -> bool:
     return _data_provider(config) in {"mixed", "auto", ""}
 
 
@@ -136,20 +153,56 @@ def _allows_akshare_fallback(config: AppConfig) -> bool:
 def _open_configured_fetcher(fetcher: Any | None, config: AppConfig, external_fetcher: bool):
     provider = _data_provider(config)
     active_context = _managed_fetcher(fetcher or _create_configured_fetcher(config))
-    parallel_stock_fetch_allowed = not external_fetcher and provider not in {"akshare", "eastmoney"}
+    parallel_backend: str | None = None
+    if not external_fetcher:
+        if provider == "tdx":
+            parallel_backend = "tdx"
+        elif provider not in {"akshare", "eastmoney"}:
+            parallel_backend = "baostock"
     try:
         active_fetcher = active_context.__enter__()
     except Exception as exc:
-        if external_fetcher or not _allows_akshare_fallback(config) or not _is_baostock_rate_limit_error(exc):
+        if external_fetcher or not _allows_tdx_fallback(config) or not _is_baostock_rate_limit_error(exc):
             raise
-        logging.getLogger(__name__).warning("baostock login blocked; fallback to AKShare: %s", exc)
-        active_context = _managed_fetcher(AkshareDataFetcher(config.data.start_date))
+        logging.getLogger(__name__).warning("baostock login blocked; fallback to TDX without another baostock attempt: %s", exc)
+        active_context = _managed_fetcher(_create_tdx_fetcher(config))
         active_fetcher = active_context.__enter__()
-        parallel_stock_fetch_allowed = False
+        parallel_backend = "tdx"
     try:
-        yield active_fetcher, parallel_stock_fetch_allowed
+        yield active_fetcher, parallel_backend
     finally:
         active_context.__exit__(None, None, None)
+
+def validate_initialization(db: Database, config: AppConfig) -> dict[str, object]:
+    health = db.data_health()
+    problems: list[str] = []
+    coverage = float(health["stock_coverage"])
+    daily_rows = int(health["daily_rows"])
+    index_symbols = int(health["index_symbols"])
+    if int(health["active_symbols"]) < 1:
+        problems.append("stock_basic is empty")
+    if coverage < config.data.init_min_stock_coverage:
+        problems.append(
+            f"stock coverage {coverage:.1%} is below {config.data.init_min_stock_coverage:.1%}"
+        )
+    if daily_rows < config.data.init_min_daily_rows:
+        problems.append(f"daily rows {daily_rows} is below {config.data.init_min_daily_rows}")
+    if index_symbols < config.data.init_min_index_count:
+        problems.append(f"index count {index_symbols} is below {config.data.init_min_index_count}")
+    logging.getLogger(__name__).info(
+        "initialization health: active=%s covered=%s coverage=%.1f%% rows=%s indexes=%s latest=%s latest_symbols=%s",
+        health["active_symbols"],
+        health["covered_symbols"],
+        coverage * 100,
+        daily_rows,
+        index_symbols,
+        health["latest_trade_date"],
+        health["latest_symbol_count"],
+    )
+    if problems:
+        raise RuntimeError("initialization data validation failed: " + "; ".join(problems))
+    return health
+
 
 def update_market_data(
     db: Database,
@@ -162,48 +215,109 @@ def update_market_data(
     external_fetcher = fetcher is not None
     counts = {"stock_basic": 0, "stock_daily": 0, "index_daily": 0, "sector_daily": 0, "failed_symbols": 0}
 
-    with _open_configured_fetcher(fetcher, config, external_fetcher) as (active_fetcher, parallel_stock_fetch_allowed):
+    with _open_configured_fetcher(fetcher, config, external_fetcher) as (active_fetcher, parallel_backend):
         if init:
             try:
                 basic = active_fetcher.fetch_stock_basic()
             except Exception as exc:
-                fallback_basic = _safe_read(db, "stock_basic", ["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"])
+                fallback_basic = _safe_read(
+                    db,
+                    "stock_basic",
+                    ["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"],
+                )
                 if fallback_basic.empty:
                     raise
                 logger.warning("股票基础信息更新失败，使用本地已有股票列表继续初始化: %s", exc)
                 basic = fallback_basic
             else:
                 if not basic.empty:
+                    if not external_fetcher and len(basic) >= 1000:
+                        db.mark_all_stocks_unlisted()
                     counts["stock_basic"] = db.upsert_dataframe("stock_basic", basic, ["code"])
                 else:
-                    fallback_basic = _safe_read(db, "stock_basic", ["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"])
+                    fallback_basic = _safe_read(
+                        db,
+                        "stock_basic",
+                        ["code", "name", "exchange", "industry", "list_date", "is_st", "is_listed"],
+                    )
                     if not fallback_basic.empty:
                         logger.warning("股票基础信息接口返回空数据，使用本地已有股票列表继续初始化")
                         basic = fallback_basic
-            existing_stock_daily = _safe_read(db, "stock_daily", ["code", "trade_date"])
-            existing_index_daily = _safe_read(db, "index_daily", ["index_code", "trade_date"])
         else:
             basic = db.read_table("stock_basic")
-            existing_stock_daily = _safe_read(db, "stock_daily", ["code", "trade_date"])
-            existing_index_daily = _safe_read(db, "index_daily", ["index_code", "trade_date"])
 
         if basic.empty:
             logger.warning("无股票基础信息，跳过行情更新")
             return counts
 
-        latest_stock_dates = _latest_dates(existing_stock_daily, "code")
-        latest_index_dates = _latest_dates(existing_index_daily, "index_code")
-        codes = basic["code"].dropna().astype(str).tolist()
+        latest_stock_dates = db.latest_dates("stock_daily", "code")
+        latest_index_dates = db.latest_dates("index_daily", "index_code")
+        active_basic = basic.copy()
+        if "is_listed" in active_basic.columns:
+            active_basic = active_basic[pd.to_numeric(active_basic["is_listed"], errors="coerce").fillna(1).eq(1)]
+        codes = active_basic["code"].dropna().astype(str).str.zfill(6).drop_duplicates().tolist()
         total = len(codes)
         skipped_symbols = 0
+        tdx_managed = parallel_backend == "tdx"
+        synced_codes: set[str] = set()
+        if tdx_managed:
+            synced_codes = db.get_synced_codes("tdx", TDX_PRICE_BASIS, config.data.start_date)
+            if init:
+                logger.info(
+                    "TDX price-basis resume state: %s/%s symbols already migrated; updates remain incremental",
+                    len(synced_codes),
+                    total,
+                )
 
         stock_tasks: list[tuple[str, str, str]] = []
         for code in codes:
-            fetch_start = _next_fetch_start(latest_stock_dates.get(code), config.data.start_date)
+            if tdx_managed and init and code not in synced_codes:
+                fetch_start = config.data.start_date
+            else:
+                fetch_start = _next_fetch_start(latest_stock_dates.get(code), config.data.start_date)
             if not _should_fetch(fetch_start, report_date):
                 skipped_symbols += 1
                 continue
             stock_tasks.append((code, fetch_start, report_date))
+
+        task_by_code = {task[0]: task for task in stock_tasks}
+
+        def record_tdx_sync(daily: pd.DataFrame) -> None:
+            if not tdx_managed or daily.empty or "code" not in daily.columns:
+                return
+            records: list[dict[str, object]] = []
+            for code, group in daily.groupby("code"):
+                normalized_code = str(code).zfill(6)
+                task = task_by_code.get(normalized_code)
+                if task is None:
+                    continue
+                if normalized_code not in synced_codes and task[1] != config.data.start_date:
+                    continue
+                records.append(
+                    {
+                        "code": normalized_code,
+                        "provider": "tdx",
+                        "price_basis": TDX_PRICE_BASIS,
+                        "start_date": config.data.start_date,
+                        "end_date": task[2],
+                        "row_count": len(group),
+                        "last_error": None,
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    }
+                )
+            if records:
+                db.upsert_dataframe(
+                    "stock_sync_status",
+                    pd.DataFrame(records),
+                    ["code", "provider", "price_basis", "start_date"],
+                )
+                synced_codes.update(str(record["code"]) for record in records)
+
+        def store_daily(daily: pd.DataFrame) -> None:
+            if daily.empty:
+                return
+            counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+            record_tdx_sync(daily)
 
         def retry_stock_tasks_sequentially(tasks: list[tuple[str, str, str]], reason: str) -> None:
             if not tasks:
@@ -216,58 +330,88 @@ def update_market_data(
                     logger.info("stock daily retry: %s/%s %s (%s -> %s)", position, len(tasks), code, fetch_start, fetch_end)
                 try:
                     daily = active_fetcher.fetch_stock_daily(code, start_date=fetch_start, end_date=fetch_end)
-                    if not daily.empty:
-                        counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+                    if daily.empty:
+                        raise RuntimeError("data provider returned no daily rows")
+                    store_daily(daily)
                 except Exception as exc:
                     counts["failed_symbols"] += 1
                     logger.warning("[%s] stock daily update failed after retry: %s", code, exc)
 
-        use_parallel_stock_fetch = bool(stock_tasks) and parallel_stock_fetch_allowed and config.data.baostock_parallel_workers > 1
+        use_parallel_stock_fetch = bool(stock_tasks) and parallel_backend is not None
+        if parallel_backend == "tdx":
+            workers = config.data.tdx_parallel_workers
+            chunk_size = config.data.tdx_parallel_chunk_size
+        else:
+            workers = config.data.baostock_parallel_workers
+            chunk_size = config.data.baostock_parallel_chunk_size
+        use_parallel_stock_fetch = use_parallel_stock_fetch and workers > 1
+
         if use_parallel_stock_fetch:
             logger.info(
-                "parallel stock daily update: %s/%s symbols, workers=%s, chunk_size=%s",
+                "%s parallel stock daily update: %s/%s symbols, workers=%s, chunk_size=%s",
+                parallel_backend.upper(),
                 len(stock_tasks),
                 total,
-                config.data.baostock_parallel_workers,
-                config.data.baostock_parallel_chunk_size,
+                workers,
+                chunk_size,
             )
-            task_by_code = {task[0]: task for task in stock_tasks}
             retry_tasks: dict[str, tuple[str, str, str]] = {}
             processed_symbols = 0
             try:
-                for daily, failures, requested in fetch_stock_daily_parallel(
-                    stock_tasks,
-                    workers=config.data.baostock_parallel_workers,
-                    chunk_size=config.data.baostock_parallel_chunk_size,
-                    query_retries=config.data.baostock_query_retries,
-                    reconnect_interval=config.data.baostock_reconnect_interval,
-                ):
+                if parallel_backend == "tdx":
+                    batches = fetch_tdx_stock_daily_parallel(
+                        stock_tasks,
+                        workers=workers,
+                        chunk_size=chunk_size,
+                        timeout_seconds=config.data.tdx_timeout_seconds,
+                        query_retries=config.data.tdx_query_retries,
+                    )
+                else:
+                    batches = fetch_stock_daily_parallel(
+                        stock_tasks,
+                        workers=workers,
+                        chunk_size=chunk_size,
+                        query_retries=config.data.baostock_query_retries,
+                        reconnect_interval=config.data.baostock_reconnect_interval,
+                    )
+                for daily, failures, requested in batches:
                     processed_symbols += requested
                     for code, error in failures:
                         task = task_by_code.get(code)
-                        if _is_baostock_rate_limit_error(error):
+                        if parallel_backend == "baostock" and _is_baostock_rate_limit_error(error):
                             counts["failed_symbols"] += 1
-                            logger.warning("[%s] stock daily blocked by baostock rate limit; stop immediate retry: %s", code, error)
+                            logger.warning("[%s] stock daily blocked by baostock; no immediate retry: %s", code, error)
                         elif task is not None:
                             retry_tasks[code] = task
-                            logger.warning("[%s] stock daily parallel fetch failed; will retry sequentially: %s", code, error)
+                            logger.warning("[%s] parallel stock daily fetch failed; queued for one retry: %s", code, error)
                         else:
                             counts["failed_symbols"] += 1
                             logger.warning("[%s] stock daily update failed: %s", code, error)
-                    if not daily.empty:
-                        counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
-                    logger.info("parallel stock daily progress: %s/%s symbols", processed_symbols, len(stock_tasks))
+                    store_daily(daily)
+                    logger.info("%s stock daily progress: %s/%s symbols", parallel_backend.upper(), processed_symbols, len(stock_tasks))
             except Exception as exc:
+                if parallel_backend == "tdx":
+                    raise RuntimeError(f"TDX parallel stock fetch aborted: {exc}") from exc
                 logger.warning("parallel stock daily update failed, fallback to sequential mode: %s", exc)
                 use_parallel_stock_fetch = False
             else:
-                retry_stock_tasks_sequentially(list(retry_tasks.values()), "parallel failures")
+                retry_limit = max(20, int(len(stock_tasks) * 0.10))
+                if parallel_backend == "tdx" and len(retry_tasks) > retry_limit:
+                    counts["failed_symbols"] += len(retry_tasks)
+                    logger.error(
+                        "TDX circuit breaker opened: %s failures exceed retry limit %s; stop instead of looping for hours",
+                        len(retry_tasks),
+                        retry_limit,
+                    )
+                else:
+                    retry_stock_tasks_sequentially(list(retry_tasks.values()), "parallel failures")
 
         if not use_parallel_stock_fetch:
             retry_stock_tasks_sequentially(stock_tasks, "sequential mode")
 
         if skipped_symbols:
             logger.info("skipped %s symbols already updated to %s", skipped_symbols, report_date)
+
         for index_code in INDEX_CODES:
             fetch_start = _next_fetch_start(latest_index_dates.get(index_code), config.data.start_date)
             if not _should_fetch(fetch_start, report_date):
@@ -276,22 +420,23 @@ def update_market_data(
             try:
                 logger.info("正在更新指数日线: %s (%s -> %s)", index_code, fetch_start, report_date)
                 index_daily = active_fetcher.fetch_index_daily(index_code, start_date=fetch_start, end_date=report_date)
-                if not index_daily.empty:
-                    counts["index_daily"] += db.upsert_dataframe("index_daily", index_daily, ["index_code", "trade_date"])
+                if index_daily.empty:
+                    raise RuntimeError("data provider returned no index rows")
+                counts["index_daily"] += db.upsert_dataframe("index_daily", index_daily, ["index_code", "trade_date"])
             except Exception as exc:
                 logger.warning("[%s] 指数数据更新失败: %s", index_code, exc)
 
-        try:
-            logger.info("正在更新行业板块数据")
-            sector_daily = active_fetcher.fetch_sector_daily(report_date)
-            if not sector_daily.empty:
-                counts["sector_daily"] = db.upsert_dataframe("sector_daily", sector_daily, ["sector_name", "trade_date"])
-        except Exception as exc:
-            logger.warning("板块数据更新失败: %s", exc)
+        if config.features.enable_sector_score:
+            try:
+                logger.info("正在更新行业板块数据")
+                sector_daily = active_fetcher.fetch_sector_daily(report_date)
+                if not sector_daily.empty:
+                    counts["sector_daily"] = db.upsert_dataframe("sector_daily", sector_daily, ["sector_name", "trade_date"])
+            except Exception as exc:
+                logger.warning("板块数据更新失败: %s", exc)
 
     logger.info("数据更新完成: %s", counts)
     return counts
-
 
 def run(argv: list[str] | None = None) -> Path | None:
     args = parse_args(argv)
@@ -308,20 +453,25 @@ def run(argv: list[str] | None = None) -> Path | None:
         if args.init:
             logger.info("初始化模式已启动，开始更新免费数据源")
             update_market_data(db, config, preliminary_date, init=True)
+            validate_initialization(db, config)
         elif not existing_basic.empty:
             logger.info("开始执行每日增量数据更新")
             update_market_data(db, config, preliminary_date, init=False)
 
         stock_basic = _safe_read(db, "stock_basic", ["code", "name", "industry", "list_date", "is_st", "is_listed"])
-        stock_daily = _safe_read(
-            db,
-            "stock_daily",
-            ["code", "trade_date", "open", "high", "low", "close", "amount", "pct_chg", "turnover_rate", "is_suspended"],
-        )
-        index_daily = _safe_read(db, "index_daily", ["index_code", "trade_date", "close", "amount", "pct_chg"])
-        sector_daily = _safe_read(db, "sector_daily", ["sector_name", "trade_date", "pct_chg", "amount"])
-        latest_trade_date = None if stock_daily.empty else str(stock_daily["trade_date"].max())
-        report_date = resolve_report_date(args.date, latest_trade_date)
+        health = db.data_health()
+        latest_trade_date = health.get("latest_trade_date")
+        report_date = resolve_report_date(args.date, str(latest_trade_date) if latest_trade_date else None)
+        analysis_start = (
+            datetime.strptime(report_date, "%Y-%m-%d").date() - timedelta(days=config.data.analysis_lookback_days)
+        ).strftime("%Y-%m-%d")
+        stock_daily = db.read_table_between("stock_daily", "trade_date", analysis_start, report_date)
+        index_daily = db.read_table_between("index_daily", "trade_date", analysis_start, report_date)
+        sector_daily = db.read_table_between("sector_daily", "trade_date", analysis_start, report_date)
+        stock_basic = fill_market_board_industry(stock_basic)
+        if config.features.enable_sector_score and sector_daily.empty:
+            logger.info("外部行业数据不可用，使用本地市场板块聚合评分")
+            sector_daily = build_market_board_daily(stock_basic, stock_daily)
 
         if stock_basic.empty or stock_daily.empty:
             logger.warning("本地数据库暂无足够行情数据，请先完成数据初始化或导入历史行情。")

@@ -3,6 +3,46 @@ from __future__ import annotations
 import pandas as pd
 
 
+def market_board(code: str) -> str:
+    normalized = str(code).zfill(6)
+    if normalized.startswith("92"):
+        return "北交所"
+    if normalized.startswith(("688", "689")):
+        return "科创板"
+    if normalized.startswith(("300", "301")):
+        return "创业板"
+    if normalized.startswith("6"):
+        return "沪市主板"
+    if normalized.startswith("0"):
+        return "深市主板"
+    return "其他"
+
+
+def fill_market_board_industry(stock_basic: pd.DataFrame) -> pd.DataFrame:
+    prepared = stock_basic.copy()
+    if "industry" not in prepared.columns:
+        prepared["industry"] = ""
+    missing = prepared["industry"].isna() | prepared["industry"].astype(str).str.strip().eq("")
+    prepared.loc[missing, "industry"] = prepared.loc[missing, "code"].astype(str).map(market_board)
+    return prepared
+
+
+def build_market_board_daily(stock_basic: pd.DataFrame, stock_daily: pd.DataFrame) -> pd.DataFrame:
+    if stock_basic.empty or stock_daily.empty:
+        return pd.DataFrame(columns=["sector_name", "trade_date", "pct_chg", "amount"])
+    basic = fill_market_board_industry(stock_basic)[["code", "industry"]].copy()
+    history = stock_daily[["code", "trade_date", "pct_chg", "amount"]].merge(basic, on="code", how="left")
+    history["pct_chg"] = pd.to_numeric(history["pct_chg"], errors="coerce")
+    history["amount"] = pd.to_numeric(history["amount"], errors="coerce")
+    history = history.dropna(subset=["trade_date", "industry", "pct_chg"])
+    result = (
+        history.groupby(["industry", "trade_date"], as_index=False)
+        .agg(pct_chg=("pct_chg", "mean"), amount=("amount", "sum"))
+        .rename(columns={"industry": "sector_name"})
+    )
+    return result[["sector_name", "trade_date", "pct_chg", "amount"]]
+
+
 def calculate_sector_scores(
     sector_daily: pd.DataFrame,
     stock_basic: pd.DataFrame,

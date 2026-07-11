@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.sector_score import calculate_sector_scores
+from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
 
 
 def test_calculate_sector_scores_ranks_hot_industries() -> None:
@@ -31,3 +31,29 @@ def test_calculate_sector_scores_ranks_hot_industries() -> None:
     robot_score = stock_scores[stock_scores["code"] == "000001"].iloc[0]["sector_score_raw"]
     bank_score = stock_scores[stock_scores["code"] == "000002"].iloc[0]["sector_score_raw"]
     assert robot_score > bank_score
+
+
+def test_local_market_board_fallback_assigns_industry_and_aggregates_daily() -> None:
+    basic = pd.DataFrame(
+        [
+            {"code": "000001", "industry": ""},
+            {"code": "300001", "industry": None},
+            {"code": "688001", "industry": ""},
+            {"code": "920001", "industry": ""},
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {"code": "000001", "trade_date": "2026-06-22", "pct_chg": 1.0, "amount": 100.0},
+            {"code": "300001", "trade_date": "2026-06-22", "pct_chg": 2.0, "amount": 200.0},
+            {"code": "688001", "trade_date": "2026-06-22", "pct_chg": 3.0, "amount": 300.0},
+            {"code": "920001", "trade_date": "2026-06-22", "pct_chg": 4.0, "amount": 400.0},
+        ]
+    )
+
+    prepared = fill_market_board_industry(basic)
+    sectors = build_market_board_daily(prepared, daily)
+
+    assert prepared["industry"].tolist() == ["深市主板", "创业板", "科创板", "北交所"]
+    assert set(sectors["sector_name"]) == {"深市主板", "创业板", "科创板", "北交所"}
+    assert sectors.loc[sectors["sector_name"] == "北交所", "amount"].iloc[0] == 400

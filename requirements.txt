@@ -4,4 +4,5 @@ PyYAML>=6.0
 openpyxl>=3.1
 baostock>=0.9
 akshare>=1.10
+pytdx>=1.72
 pytest>=8.0

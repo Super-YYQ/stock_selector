@@ -8,6 +8,8 @@ from src.fetch_data import (
     normalize_baostock_daily,
     normalize_baostock_index_daily,
     normalize_baostock_stock_basic,
+    normalize_tdx_stock_daily,
+    tdx_market,
 )
 
 
@@ -47,6 +49,87 @@ def test_normalize_baostock_daily_renames_and_converts_numbers() -> None:
         }
     ]
 
+
+def test_normalize_tdx_stock_daily_converts_lots_and_calculates_returns() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "open": 10.0,
+                "close": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "vol": 1000,
+                "amount": 1000000,
+                "datetime": "2026-06-21 15:00",
+            },
+            {
+                "open": 10.1,
+                "close": 10.5,
+                "high": 10.6,
+                "low": 10.0,
+                "vol": 1200,
+                "amount": 1250000,
+                "datetime": "2026-06-22 15:00",
+            },
+        ]
+    )
+
+    normalized = normalize_tdx_stock_daily(raw, "000001")
+
+    assert normalized["trade_date"].tolist() == ["2026-06-21", "2026-06-22"]
+    assert normalized["volume"].tolist() == [100000.0, 120000.0]
+    assert normalized["amount"].tolist() == [1000000.0, 1250000.0]
+    assert normalized.loc[0, "pct_chg"] == 0
+    assert round(normalized.loc[1, "pct_chg"], 6) == 5
+    assert pd.isna(normalized.loc[1, "turnover_rate"])
+
+
+def test_tdx_market_covers_shenzhen_shanghai_and_beijing() -> None:
+    assert tdx_market("000001") == 0
+    assert tdx_market("600000") == 1
+    assert tdx_market("920001") == 2
+
+
+
+def test_tdx_fetcher_switches_host_after_connection_failure() -> None:
+    from src.fetch_data import TdxDataFetcher
+
+    class FakeApi:
+        def __init__(self, connects: bool) -> None:
+            self.connects = connects
+
+        def connect(self, ip: str, port: int, time_out: float) -> bool:
+            return self.connects
+
+        def disconnect(self) -> None:
+            pass
+
+        def get_security_bars(self, category: int, market: int, code: str, start: int, count: int):
+            return [
+                {
+                    "open": 10,
+                    "close": 10.5,
+                    "high": 10.6,
+                    "low": 9.9,
+                    "vol": 1000,
+                    "amount": 1050000,
+                    "datetime": "2026-06-22 15:00",
+                }
+            ]
+
+    apis = iter([FakeApi(False), FakeApi(True)])
+    fetcher = TdxDataFetcher(
+        "2026-06-01",
+        query_retries=2,
+        hosts=(("bad", "127.0.0.1", 1), ("good", "127.0.0.2", 2)),
+        api_factory=lambda: next(apis),
+    )
+
+    with fetcher:
+        daily = fetcher.fetch_stock_daily("000001", "2026-06-01", "2026-06-22")
+
+    assert daily["code"].tolist() == ["000001"]
+    assert daily["trade_date"].tolist() == ["2026-06-22"]
 
 def test_normalize_akshare_sector_supports_chinese_columns() -> None:
     raw = pd.DataFrame(

@@ -62,7 +62,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-本项目使用的核心依赖包括 `pandas`、`numpy`、`SQLite`、`openpyxl`、`baostock`、`AKShare`。其中 baostock 和 AKShare 都是免费数据源。
+本项目使用的核心依赖包括 `pandas`、`numpy`、`SQLite`、`openpyxl`、`pytdx`、`baostock` 和 `AKShare`。默认使用通达信公开行情节点（pytdx），免费、免账号，也不会登录 baostock。
 
 ### 5. 首次初始化历史数据
 
@@ -78,10 +78,10 @@ python run_daily.py --init
 - 拉取 A 股基础信息
 - 拉取个股日线数据
 - 拉取主要指数日线数据
-- 尝试拉取行业板块数据
+- 尝试拉取行业板块数据；不可用时从个股日线聚合沪市主板、深市主板、创业板、科创板和北交所热度
 - 生成当日盘后报告
 
-首次初始化可能比较慢，因为要遍历较多股票。中途个别股票或板块接口失败时，程序会写入日志，并尽量继续跑完整体流程。
+首次初始化需要遍历全市场。当前 Windows 环境实测：从 2023-01-01 回填约 5530 只股票用了约 12 分钟，随后因子计算和 Excel 生成约 2 分钟；网络和电脑性能不同会有差异。中途个别股票或板块接口失败时，程序会写入日志，并尽量继续跑完整体流程。
 
 ### 6. 退出虚拟环境
 
@@ -110,27 +110,38 @@ data/stock.db
 
 ```yaml
 data:
-  provider: mixed
+  provider: tdx
   start_date: "2023-01-01"
-  baostock_query_retries: 3
-  baostock_reconnect_interval: 200
-  baostock_parallel_workers: 2
-  baostock_parallel_chunk_size: 20
+  tdx_parallel_workers: 4
+  tdx_parallel_chunk_size: 50
+  tdx_timeout_seconds: 3
+  tdx_query_retries: 3
+  init_min_stock_coverage: 0.90
+  init_min_daily_rows: 100000
+  init_min_index_count: 3
+  analysis_lookback_days: 240
 ```
 
-`data.provider` 支持三个常用值：
+`data.provider` 支持以下值：
 
-- `mixed`：默认值，先尝试 baostock；如果 baostock 登录返回黑名单或限流，会自动切换到 AKShare 继续跑。
-- `akshare`：直接使用 AKShare / 东方财富数据源，不再登录 baostock，速度通常慢一些，但更适合当前 baostock 黑名单环境。
-- `baostock`：只使用 baostock，适合 baostock 服务恢复且你想继续使用它时。
+- `tdx`：默认值。连接多个通达信公开行情节点，免费、免账号，支持沪深北三市，不会调用 `baostock.login()`。
+- `akshare`：使用 AKShare / 东方财富逐只拉取。当前网络下可能出现 `RemoteDisconnected`，不建议用于全市场初始化。
+- `baostock`：只使用 baostock。已经出现黑名单时不要选择这个值。
+- `mixed`：兼容模式，先尝试 baostock；只有登录被黑名单或限流拦截时才切到 TDX。当前建议直接使用 `tdx`，避免无意义地再次登录 baostock。
 
-`baostock_query_retries` 控制 baostock 会话过期或未登录错误的重试次数。`baostock_reconnect_interval` 控制每 N 次 baostock 查询主动重连。`baostock_parallel_workers` 和 `baostock_parallel_chunk_size` 只影响 baostock 的并行日线回填；切到 AKShare 后会自动改为顺序拉取，避免再次触发服务端限制。中断后的初始化会按本地 `stock_daily` 已有日期继续增量补数据。
+TDX 默认使用 4 个线程，每批 50 只股票。某个节点失败时会自动切换到其他节点；如果短时间失败股票过多，熔断器会停止空转并明确报错。`--init` 会记录每只股票的 TDX 完整同步状态，中断后再次执行同一命令可以准确续传。
 
-如果已经出现 `黑名单用户，请与管理员联系`，不需要注册账号；baostock 本身是免费免账号接口。建议保持默认 `provider: mixed`，或临时改成 `provider: akshare` 后重新运行：
+初始化结束后还会检查数据质量：股票覆盖率至少 90%、日线至少 10 万条、主要指数至少 3 个。没有达到这些条件时命令会失败并提示具体缺口，不会把空数据或少量数据当成初始化成功。
+
+如果已经看到 `黑名单用户，请与管理员联系`，不需要注册账号，也不要继续反复尝试 baostock。确认配置保持 `provider: tdx`，然后运行：
 
 ```powershell
 python run_daily.py --init
 ```
+
+从旧版 baostock 数据迁移时，TDX 会按股票逐只用未复权价格完整覆盖配置日期范围，并写入 `stock_sync_status` 断点状态。已有数据不会在开始时整库删除；中断后已完成的股票会被跳过。
+
+默认 TDX 模式不依赖东方财富行业接口；外部行业数据为空时，报告中的强势板块会使用本地市场板块聚合结果，不会再生成空白 sheet。
 
 也就是说，首次执行：
 
@@ -142,8 +153,8 @@ python run_daily.py --init
 
 大致空间估算：
 
-- 从 2023 年开始的全市场日线，通常是几十 MB 到几百 MB 量级。
-- 如果把 `start_date` 改到 2010 年甚至更早，数据库可能增长到几百 MB 甚至更高。
+- 当前实测从 2023 年开始的全市场日线约占 600 MB；SQLite 索引、股票数量和运行日期会让体积有所变化。
+- 如果把 `start_date` 改到 2010 年甚至更早，数据库可能增长到数 GB。
 - `reports/` 里的 Excel 报告通常不大，但长期每天生成也会慢慢累积。
 - `logs/` 日志一般很小。
 
@@ -164,7 +175,7 @@ python run_daily.py
 
 会尽量按本地数据库已有日期做增量更新：如果某只股票本地最新日期是 2026-06-20，而你运行到 2026-06-23，它只会请求 2026-06-21 到 2026-06-23 的数据，不会每天重复拉取全部历史。
 
-如果你想重新从配置的 `start_date` 全量初始化，可以删除本地数据库后再执行 `--init`：
+只有在你明确想清空所有本地数据并从零重建时，才删除数据库后执行 `--init`；普通中断续传不要删除：
 
 ```powershell
 Remove-Item data\stock.db
@@ -449,7 +460,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-### 4. baostock 或 AKShare 拉取失败
+### 4. 行情拉取失败或长时间没有进度
 
 先看日志：
 
@@ -457,18 +468,28 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 logs/run_YYYY-MM-DD.log
 ```
 
+先确认 `config/strategy.yml` 中是：
+
+```yaml
+data:
+  provider: tdx
+```
+
 常见原因：
 
-- 网络不稳定。
-- 免费接口临时不可用。
-- AKShare 字段变化。
-- 非交易日或指定日期没有数据。
+- 当前通达信节点暂时不可用，程序会自动切换到备用节点。
+- 网络防火墙阻止了 7709 端口；默认节点列表同时包含 80 端口节点。
+- 指定日期早于股票上市日期，此时个别股票可能没有数据。
+- 使用了 `provider: baostock`，而当前网络已被 baostock 标记为黑名单。
+- 使用了 `provider: akshare`，东方财富主动断开连接。
 
-一般可以稍后重跑：
+初始化被中断时直接重新执行即可，不要删除数据库：
 
 ```powershell
-python run_daily.py --date 2026-06-22
+python run_daily.py --init
 ```
+
+日志中的 `TDX stock daily progress` 会显示已处理股票数；结束时 `initialization health` 会显示覆盖率、总行数、指数数和最新交易日。
 
 ### 5. 没有生成报告
 

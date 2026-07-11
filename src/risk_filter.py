@@ -5,30 +5,49 @@ import pandas as pd
 from src.config import RiskConfig, ScoringConfig
 
 
+def _number(row: pd.Series, column: str) -> float:
+    value = row.get(column, 0)
+    if value is None or pd.isna(value):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def calculate_risk_penalties(factors: pd.DataFrame, risk: RiskConfig, scoring: ScoringConfig) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for _, row in factors.iterrows():
         penalty = 0.0
         warnings: list[str] = []
-        if float(row.get("return_5d", 0) or 0) > risk.max_pct_chg_5d:
+        return_5d = _number(row, "return_5d")
+        return_10d = _number(row, "return_10d")
+        distance_ma20 = _number(row, "distance_ma20")
+        upper_shadow_ratio = _number(row, "upper_shadow_ratio")
+        amount_ratio = _number(row, "amount_ratio")
+        pct_chg = _number(row, "pct_chg")
+        turnover_rate = _number(row, "turnover_rate")
+        volatility_20d = _number(row, "volatility_20d")
+
+        if return_5d > risk.max_pct_chg_5d:
             penalty += 5
-            warnings.append(f"近5日涨幅 {row.get('return_5d'):.1f}% 过大")
-        if float(row.get("return_10d", 0) or 0) > risk.max_pct_chg_10d:
+            warnings.append(f"近5日涨幅 {return_5d:.1f}% 过大")
+        if return_10d > risk.max_pct_chg_10d:
             penalty += 5
-            warnings.append(f"近10日涨幅 {row.get('return_10d'):.1f}% 过大")
-        if float(row.get("distance_ma20", 0) or 0) > risk.max_distance_ma20:
+            warnings.append(f"近10日涨幅 {return_10d:.1f}% 过大")
+        if distance_ma20 > risk.max_distance_ma20:
             penalty += 5
-            warnings.append(f"距离20日线 {row.get('distance_ma20'):.1f}% 偏远")
-        if float(row.get("upper_shadow_ratio", 0) or 0) > risk.long_upper_shadow_ratio:
+            warnings.append(f"距离20日线 {distance_ma20:.1f}% 偏远")
+        if upper_shadow_ratio > risk.long_upper_shadow_ratio:
             penalty += 3
             warnings.append("今日长上影线明显")
-        if float(row.get("amount_ratio", 0) or 0) > 3 and float(row.get("pct_chg", 0) or 0) < 1:
+        if amount_ratio > 3 and pct_chg < 1:
             penalty += 4
             warnings.append("爆量滞涨")
-        if float(row.get("turnover_rate", 0) or 0) > risk.high_turnover_ratio:
+        if turnover_rate > risk.high_turnover_ratio:
             penalty += 3
             warnings.append("换手率过高")
-        if float(row.get("volatility_20d", 0) or 0) > risk.high_volatility_20d:
+        if volatility_20d > risk.high_volatility_20d:
             penalty += 3
             warnings.append("近20日波动率偏高")
         rows.append(

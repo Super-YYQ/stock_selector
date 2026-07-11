@@ -1,10 +1,12 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.config import AppConfig, DataConfig
+from src.fetch_data import TDX_PRICE_BASIS
 from src.database import Database
-from src.run_daily import parse_args, resolve_report_date, update_market_data
+from src.run_daily import parse_args, resolve_report_date, update_market_data, validate_initialization
 
 
 def test_parse_args_supports_init_and_date() -> None:
@@ -16,6 +18,37 @@ def test_parse_args_supports_init_and_date() -> None:
 
 def test_resolve_report_date_uses_requested_date() -> None:
     assert resolve_report_date("2026-06-22", "2026-06-21") == "2026-06-22"
+
+
+def test_validate_initialization_rejects_incomplete_market_data(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(
+        data=DataConfig(
+            database=str(tmp_path / "stock.db"),
+            init_min_stock_coverage=0.9,
+            init_min_daily_rows=2,
+            init_min_index_count=3,
+        )
+    )
+    db.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"code": "000001", "name": "A", "is_listed": 1},
+                {"code": "000002", "name": "B", "is_listed": 1},
+            ]
+        ),
+        ["code"],
+    )
+    db.upsert_dataframe(
+        "stock_daily",
+        pd.DataFrame([{"code": "000001", "trade_date": "2026-06-22", "close": 10.0}]),
+        ["code", "trade_date"],
+    )
+
+    with pytest.raises(RuntimeError, match="initialization data validation failed"):
+        validate_initialization(db, config)
 
 
 class FakeFetcher:
@@ -96,12 +129,12 @@ def test_update_market_data_writes_fetched_tables(tmp_path: Path) -> None:
 
 
 
-def test_init_falls_back_to_akshare_when_baostock_login_is_blacklisted(tmp_path: Path, monkeypatch) -> None:
+def test_init_falls_back_to_tdx_when_baostock_login_is_blacklisted(tmp_path: Path, monkeypatch) -> None:
     import src.run_daily as run_daily_module
 
     db = Database(tmp_path / "stock.db")
     db.initialize()
-    config = AppConfig(data=DataConfig(database=str(tmp_path / "stock.db"), baostock_parallel_workers=1))
+    config = AppConfig(data=DataConfig(database=str(tmp_path / "stock.db"), provider="mixed", baostock_parallel_workers=1))
 
     class BlacklistedBaostockFetcher:
         def __enter__(self):
@@ -113,7 +146,7 @@ def test_init_falls_back_to_akshare_when_baostock_login_is_blacklisted(tmp_path:
     fallback = FakeFetcher()
 
     monkeypatch.setattr(run_daily_module, "DataFetcher", lambda *args, **kwargs: BlacklistedBaostockFetcher())
-    monkeypatch.setattr(run_daily_module, "AkshareDataFetcher", lambda *args, **kwargs: fallback, raising=False)
+    monkeypatch.setattr(run_daily_module, "TdxDataFetcher", lambda *args, **kwargs: fallback, raising=False)
 
     counts = run_daily_module.update_market_data(db, config, "2026-06-22", init=True)
 
@@ -266,6 +299,7 @@ def test_init_uses_parallel_stock_daily_fetcher_when_configured(tmp_path: Path, 
     config = AppConfig(
         data=DataConfig(
             database=str(tmp_path / "stock.db"),
+            provider="baostock",
             start_date="2023-01-01",
             baostock_parallel_workers=2,
             baostock_parallel_chunk_size=7,
@@ -351,6 +385,7 @@ def test_parallel_stock_daily_failures_are_retried_sequentially(tmp_path: Path, 
     config = AppConfig(
         data=DataConfig(
             database=str(tmp_path / "stock.db"),
+            provider="baostock",
             start_date="2023-01-01",
             baostock_parallel_workers=2,
             baostock_parallel_chunk_size=7,
@@ -429,6 +464,7 @@ def test_parallel_stock_daily_blacklist_failures_are_not_retried_immediately(tmp
     config = AppConfig(
         data=DataConfig(
             database=str(tmp_path / "stock.db"),
+            provider="baostock",
             start_date="2023-01-01",
             baostock_parallel_workers=2,
             baostock_parallel_chunk_size=7,
@@ -493,3 +529,93 @@ def test_parallel_stock_daily_blacklist_failures_are_not_retried_immediately(tmp
 
     assert counts["failed_symbols"] == 1
     assert db.read_table("stock_daily")["code"].tolist() == ["000001"]
+
+
+def test_tdx_init_parallel_fetch_marks_full_refresh_for_resume(tmp_path: Path, monkeypatch) -> None:
+    import src.run_daily as run_daily_module
+
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    config = AppConfig(
+        data=DataConfig(
+            database=str(tmp_path / "stock.db"),
+            provider="tdx",
+            start_date="2023-01-01",
+            tdx_parallel_workers=2,
+            tdx_parallel_chunk_size=10,
+        )
+    )
+
+    class TdxBasicFetcher(FakeFetcher):
+        def fetch_stock_basic(self) -> pd.DataFrame:
+            rows = []
+            for code, name, exchange in [("000001", "A", "sz"), ("920001", "B", "bj")]:
+                rows.append(
+                    {
+                        "code": code,
+                        "name": name,
+                        "exchange": exchange,
+                        "industry": "",
+                        "list_date": "",
+                        "is_st": 0,
+                        "is_listed": 1,
+                    }
+                )
+            return pd.DataFrame(rows)
+
+    captured: dict[str, object] = {}
+
+    def fake_tdx_parallel(tasks, workers, chunk_size, timeout_seconds, query_retries):
+        captured["tasks"] = tasks
+        captured["workers"] = workers
+        captured["chunk_size"] = chunk_size
+        yield (
+            pd.DataFrame(
+                [
+                    {
+                        "code": code,
+                        "trade_date": end_date,
+                        "open": 10,
+                        "high": 11,
+                        "low": 9,
+                        "close": 10.5,
+                        "volume": 1000,
+                        "amount": 150000000,
+                        "turnover_rate": None,
+                        "pct_chg": 2.0,
+                        "is_suspended": False,
+                    }
+                    for code, _start_date, end_date in tasks
+                ]
+            ),
+            [],
+            len(tasks),
+        )
+
+    monkeypatch.setattr(run_daily_module, "TdxDataFetcher", lambda *args, **kwargs: TdxBasicFetcher())
+    monkeypatch.setattr(run_daily_module, "fetch_tdx_stock_daily_parallel", fake_tdx_parallel)
+
+    counts = run_daily_module.update_market_data(db, config, "2026-06-23", init=True)
+
+    assert counts["stock_daily"] == 2
+    assert captured["workers"] == 2
+    assert captured["chunk_size"] == 10
+    assert captured["tasks"] == [
+        ("000001", "2023-01-01", "2026-06-23"),
+        ("920001", "2023-01-01", "2026-06-23"),
+    ]
+    assert db.get_synced_codes("tdx", TDX_PRICE_BASIS, "2023-01-01", "2026-06-23") == {
+        "000001",
+        "920001",
+    }
+
+    run_daily_module.update_market_data(db, config, "2026-06-24", init=True)
+
+    assert captured["tasks"] == [
+        ("000001", "2026-06-24", "2026-06-24"),
+        ("920001", "2026-06-24", "2026-06-24"),
+    ]
+    assert db.get_synced_codes("tdx", TDX_PRICE_BASIS, "2023-01-01", "2026-06-24") == {
+        "000001",
+        "920001",
+    }

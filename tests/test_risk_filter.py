@@ -27,3 +27,25 @@ def test_risk_penalty_caps_and_explains_multiple_risks() -> None:
     assert row["risk_penalty"] == 20
     assert "近5日涨幅" in row["risk_warning"]
     assert "距离20日线" in row["risk_warning"]
+
+
+def test_risk_penalty_treats_nullable_numeric_values_as_zero() -> None:
+    factors = pd.DataFrame(
+        [
+            {
+                "code": "000001",
+                "return_5d": 0.0,
+                "return_10d": 0.0,
+                "distance_ma20": 0.0,
+                "upper_shadow_ratio": pd.NA,
+                "amount_ratio": 1.0,
+                "pct_chg": 0.0,
+                "turnover_rate": pd.NA,
+                "volatility_20d": 0.0,
+            }
+        ]
+    )
+
+    result = calculate_risk_penalties(factors, RiskConfig(), ScoringConfig())
+
+    assert result.loc[0, "risk_penalty"] == 0
