@@ -4,6 +4,7 @@
   var state = {
     payload: null,
     status: null,
+    scheduler: null,
     strategies: null,
     customStrategies: null,
     pool: null,
@@ -119,12 +120,14 @@
       request("/api/status"),
       request("/api/strategies"),
       request("/api/pool-config"),
-      request("/api/custom-strategies")
+      request("/api/custom-strategies"),
+      request("/api/scheduler")
     ]);
     if (results[0].status === "fulfilled") state.status = results[0].value;
     if (results[1].status === "fulfilled") state.strategies = results[1].value;
     if (results[2].status === "fulfilled") state.pool = results[2].value;
     if (results[3].status === "fulfilled") state.customStrategies = results[3].value;
+    if (results[4].status === "fulfilled") state.scheduler = results[4].value;
   }
 
   function setConnection(kind, label) {
@@ -707,9 +710,65 @@
       button.disabled = !reports.length;
       button.dataset.href = reports.length ? reports[0].download_url : "";
     }
+    renderScheduler();
     byId("mode-note").textContent = state.mode === "static"
       ? "公开页面只展示筛选结果，不包含本地数据库、日志和任务执行权限。"
       : "服务仅监听本机地址；远程部署时请配置访问控制和 HTTPS。";
+  }
+
+  function displayDateTime(value) {
+    if (!value) return "--";
+    return String(value).replace("T", " ").slice(0, 16);
+  }
+
+  function renderScheduler() {
+    var scheduler = state.scheduler || {};
+    var supported = scheduler.supported !== false;
+    var enabled = Boolean(scheduler.enabled);
+    var statusNode = byId("scheduler-state");
+    statusNode.textContent = !supported ? "不支持" : (enabled ? "已启用" : "未启用");
+    statusNode.className = "scheduler-state" + (enabled ? " active" : "");
+    byId("scheduler-time").value = scheduler.time || "17:30";
+    byId("scheduler-publish").checked = Boolean(scheduler.publish);
+    byId("scheduler-time").disabled = !supported;
+    byId("scheduler-publish").disabled = !supported;
+    byId("save-scheduler-button").disabled = !supported;
+    byId("disable-scheduler-button").disabled = !supported || !enabled;
+    byId("scheduler-summary-title").textContent = enabled
+      ? "工作日 " + (scheduler.time || "17:30") + " 自动复盘"
+      : "工作日盘后自动复盘";
+    byId("scheduler-summary-text").textContent = !supported
+      ? (scheduler.message || "当前系统不支持本地计划任务管理")
+      : (enabled
+        ? "计划任务已生效" + (scheduler.publish ? "，完成后会推送网页报告。" : "，报告只保存在本机。")
+        : "设置时间后启用，电脑关机期间不会运行，恢复可用后会补跑一次。");
+    byId("scheduler-next-run").textContent = displayDateTime(scheduler.next_run_time);
+    byId("scheduler-last-run").textContent = displayDateTime(scheduler.last_run_time);
+    var result = scheduler.last_result;
+    byId("scheduler-last-result").textContent = result == null ? "--" : (Number(result) === 0 ? "成功" : "代码 " + result);
+  }
+
+  async function saveScheduler(enabled) {
+    var body = {
+      enabled: enabled,
+      time: byId("scheduler-time").value || "17:30",
+      publish: byId("scheduler-publish").checked
+    };
+    byId("save-scheduler-button").disabled = true;
+    byId("disable-scheduler-button").disabled = true;
+    try {
+      state.scheduler = await request("/api/scheduler", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      renderScheduler();
+      icons();
+      toast(enabled ? "定时执行已启用" : "定时执行已停用");
+    } catch (error) {
+      toast((enabled ? "保存失败：" : "停用失败：") + error.message);
+      renderScheduler();
+    }
   }
 
   function renderRunner(runner) {
@@ -816,6 +875,8 @@
     byId("save-pool-button").addEventListener("click", savePool);
     byId("run-button").addEventListener("click", function () { startRun(); });
     byId("quick-run-button").addEventListener("click", function () { startRun("daily"); });
+    byId("save-scheduler-button").addEventListener("click", function () { saveScheduler(true); });
+    byId("disable-scheduler-button").addEventListener("click", function () { saveScheduler(false); });
     byId("download-report-button").addEventListener("click", function (event) {
       var href = event.currentTarget.dataset.href;
       if (href) window.location.href = href;

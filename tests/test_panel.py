@@ -54,11 +54,25 @@ strategies:
 def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, monkeypatch) -> None:
     _project(tmp_path)
     monkeypatch.setattr(panel, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        panel,
+        "scheduler_status",
+        lambda root: {"supported": True, "enabled": False, "time": "17:30"},
+    )
+    monkeypatch.setattr(
+        panel,
+        "update_scheduler",
+        lambda root, **values: {"supported": True, **values},
+    )
 
     latest = panel.latest_report()
     status = panel.status()
     strategies = panel.strategies()
     custom = panel.custom_strategies()
+    schedule = panel.scheduler()
+    saved_schedule = panel.save_scheduler(
+        panel.SchedulerUpdate(enabled=True, time="18:00", publish=True)
+    )
     updated = panel.update_strategies(
         panel.StrategyUpdate(enabled=["ma_volume", "sector_leader"], profile="custom")
     )
@@ -78,6 +92,8 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
     assert "health" in status
     assert strategies["enabled"] == ["ma_volume"]
     assert custom["catalog"][0]["key"] == "test_formula"
+    assert schedule["enabled"] is False
+    assert saved_schedule == {"supported": True, "enabled": True, "time": "18:00", "publish": True}
     assert updated_custom["catalog"][0]["enabled"] is False
     assert updated["enabled"] == ["ma_volume", "sector_leader"]
     assert pool["min_list_days"] == 180

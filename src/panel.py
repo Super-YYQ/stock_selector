@@ -30,6 +30,7 @@ from src.custom_formulas import (
     update_custom_formula_enabled,
 )
 from src.database import Database
+from src.scheduler import SchedulerError, scheduler_status, update_scheduler
 from src.strategies.registry import STRATEGY_PROFILES, STRATEGY_REGISTRY, strategy_catalog
 
 
@@ -56,6 +57,12 @@ class StrategyUpdate(BaseModel):
 
 class CustomStrategyUpdate(BaseModel):
     enabled: list[str]
+
+
+class SchedulerUpdate(BaseModel):
+    enabled: bool
+    time: str = Field(default="17:30", pattern="^(?:[01]\\d|2[0-3]):[0-5]\\d$")
+    publish: bool = False
 
 
 class PoolConfigUpdate(BaseModel):
@@ -192,6 +199,27 @@ def status() -> dict[str, Any]:
         "reports": reports,
         "server_time": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+@app.get("/api/scheduler")
+def scheduler() -> dict[str, Any]:
+    try:
+        return scheduler_status(ROOT)
+    except SchedulerError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/api/scheduler")
+def save_scheduler(update: SchedulerUpdate) -> dict[str, Any]:
+    try:
+        return update_scheduler(
+            ROOT,
+            enabled=update.enabled,
+            time=update.time,
+            publish=update.publish,
+        )
+    except SchedulerError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/strategies")

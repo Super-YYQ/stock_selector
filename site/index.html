@@ -191,6 +191,21 @@
             <section class="data-surface"><div class="surface-heading"><div><span class="section-label">本地数据库</span><h2>数据健康</h2></div><span class="health-state" id="health-state">--</span></div><dl class="health-list" id="health-list"></dl></section>
             <section class="data-surface local-only"><div class="surface-heading"><div><span class="section-label">后台任务</span><h2>任务执行</h2></div><span class="run-state" id="run-state">空闲</span></div><div class="run-controls"><label><span>运行模式</span><select id="run-mode"><option value="daily">每日增量</option><option value="init">首次初始化 / 补全</option></select></label><label><span>指定日期</span><input id="run-date" type="date"></label><button class="primary-button" id="run-button"><i data-lucide="play"></i><span>开始执行</span></button></div><pre class="run-output" id="run-output">等待任务</pre></section>
           </div>
+          <section class="data-surface scheduler-surface local-only">
+            <div class="surface-heading"><div><span class="section-label">Windows 计划任务</span><h2>定时执行</h2></div><span class="scheduler-state" id="scheduler-state">读取中</span></div>
+            <div class="scheduler-layout">
+              <div class="scheduler-summary">
+                <div class="scheduler-icon"><i data-lucide="calendar-clock"></i></div>
+                <div><strong id="scheduler-summary-title">工作日盘后自动复盘</strong><p id="scheduler-summary-text">每周一至周五按设定时间执行；错过时间后将在电脑恢复可用时补跑。</p></div>
+              </div>
+              <div class="scheduler-controls">
+                <label><span>执行时间</span><input id="scheduler-time" type="time" value="17:30" step="60"></label>
+                <label class="scheduler-publish"><input id="scheduler-publish" type="checkbox"><span><b>完成后推送网页报告</b><small>需要本机已配置 GitHub 推送权限</small></span></label>
+                <div class="scheduler-actions"><button class="primary-button" id="save-scheduler-button"><i data-lucide="calendar-check"></i><span>启用并保存</span></button><button class="ghost-button" id="disable-scheduler-button"><i data-lucide="calendar-x"></i><span>停用</span></button></div>
+              </div>
+            </div>
+            <dl class="scheduler-meta"><div><dt>下次执行</dt><dd id="scheduler-next-run">--</dd></div><div><dt>上次执行</dt><dd id="scheduler-last-run">--</dd></div><div><dt>上次结果</dt><dd id="scheduler-last-result">--</dd></div></dl>
+          </section>
           <section class="data-surface runs-surface local-only"><div class="surface-heading"><div><span class="section-label">执行记录</span><h2>最近任务</h2></div></div><div class="table-wrap"><table id="runs-table"></table></div></section>
           <section class="system-note"><i data-lucide="shield-check"></i><p id="mode-note">页面只展示盘后观察结果，不包含数据库、日志或交易功能。</p></section>
         </section>
@@ -223,6 +238,6 @@
 
   <div class="toast" id="toast" role="status"></div>
   <script src="assets/lucide.min.js"></script>
-  <script src="assets/app.js?v=20260712-4"></script>
+  <script src="assets/app.js?v=20260712-5"></script>
 </body>
 </html>

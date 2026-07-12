@@ -35,6 +35,7 @@ Main entry points:
 - `src/report.py`: styled Excel output
 - `src/web_report.py`: JSON/static report output
 - `src/panel.py`: local API and background task runner
+- `src/scheduler.py`: fixed-command Windows scheduled-task boundary
 - `web/`: build-free HTML/CSS/JS shared by local panel and Pages
 - `site/`: generated, publishable static output
 
@@ -48,6 +49,7 @@ Main entry points:
 - Do not commit `data/*.db`, logs, Excel reports or virtual environments.
 - GitHub Pages may receive only generated static files under `site/`.
 - The panel binds to `127.0.0.1` by default. Public server deployment requires reverse-proxy authentication and HTTPS.
+- Scheduled-task management must keep the task name and script paths fixed. Never accept arbitrary shell commands from the panel.
 - Strategy scores are aggregated by family maximum, then summed across families. Do not restore naive summation of related strategies.
 - Every selected stock must retain an explainable reason and risk warning.
 - Custom formulas are an independent observation surface and must not silently alter the main ranking.

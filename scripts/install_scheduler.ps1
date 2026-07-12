@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$TaskName = "A股盘后选股助手"
+$TaskName = -join @([char]0x0041, [char]0x80A1, [char]0x76D8, [char]0x540E, [char]0x9009, [char]0x80A1, [char]0x52A9, [char]0x624B)
 $Bootstrap = Join-Path $Root "scripts\bootstrap.py"
 $PythonLauncher = $null
 $Py = Get-Command py.exe -ErrorAction SilentlyContinue
