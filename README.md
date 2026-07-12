@@ -18,9 +18,10 @@
 - 股票池范围：可排除北交所、科创板、创业板或其他不关注的市场板块
 - 多因子排名：板块、股性、量价、RPS、市场修正与风险扣分
 - 十种策略：突破、趋势、回踩、事件、板块共振五类策略
+- 自定义公式：安全 YAML 条件公式，独立筛选命中股票，不改变综合评分
 - 结果追踪：自动记录入选股票，并回填 1 / 3 / 5 / 10 日收益
 - 双报告：格式化 Excel + 响应式网页
-- 管理面板：策略开关、任务执行、数据健康、历史表现和报告下载
+- 管理面板：每日简报、公式筛选、策略开关、任务执行、数据健康和报告下载
 - 自动化：Windows 计划任务、Docker Compose、GitHub Pages
 
 ## Windows 快速开始
@@ -101,7 +102,13 @@ powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18
 
 在 Top 50 / Top 10 间切换，可按代码、名称、行业、概念和市场板搜索。列表只展示短标签；点击行末详情按钮可查看完整入选理由、得分结构、行业阶段表现、涨停线索、次日条件和风险说明。
 
-### 策略与股票池
+### 自定义策略
+
+单独展示 `config/custom_strategies.yml` 中每条公式的当日命中股票。公式结果不参与综合总分，适合将 K 线形态、量能和 RPS 条件做成独立观察池。
+
+后续提供 K 线图或明确条件时，可将规则整理为安全公式；重新执行每日任务或离线重算后，面板会按公式分别显示命中数量和股票明细。
+
+### 策略配置
 
 支持四个预设组合，也可以逐项开关策略，并直接配置最低股价、上市天数、最低成交额、ST / 停牌过滤和排除市场板块：
 
@@ -145,8 +152,9 @@ powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18
 4. Top10 重点关注
 5. 个股说明（完整行业、题材、策略与风险说明）
 6. 策略表现
-7. 风险过滤名单
-8. 原始评分明细
+7. 自定义策略
+8. 风险过滤名单
+9. 原始评分明细
 
 Top50 / Top10 使用短标签保持紧凑，完整长文本集中在“个股说明”。表格包含冻结表头与股票列、筛选、条件颜色、数据条、分组页签和统一列宽；原始明细默认隐藏，可在 Excel 中取消隐藏。
 
@@ -220,8 +228,9 @@ chmod +x start.sh daily.sh
 
 - [`config/strategy.yml`](config/strategy.yml)：数据源、并发、初始化验收、报告、面板、功能开关、总分权重和策略。
 - [`config/stock_pool.yml`](config/stock_pool.yml)：股票池范围、市场板排除和风险阈值。
+- [`config/custom_strategies.yml`](config/custom_strategies.yml)：自定义公式、启用状态、条件、排序和最大结果数。
 
-常用设置可直接在面板的 **策略与股票池** 页面修改。编辑 YAML 后，配置会在下一次任务中生效。
+常用设置可直接在面板的 **策略配置** 或 **自定义策略** 页面修改。编辑 YAML 后，配置会在下一次任务中生效。
 
 | 常见目标 | 修改参数 |
 |---|---|
@@ -258,6 +267,9 @@ chmod +x start.sh daily.sh
 # 指定日期重跑
 .\.venv\Scripts\python.exe run_daily.py --date 2026-06-22
 
+# 只用本地数据库重算策略和报告，不连接行情源
+.\.venv\Scripts\python.exe run_daily.py --date 2026-06-22 --offline
+
 # 启动面板
 .\.venv\Scripts\python.exe -m src.panel
 ```
@@ -277,10 +289,11 @@ deactivate
 ## 项目结构
 
 ```text
-config/                 策略、数据源、股票池和风险配置
+config/                 策略、公式、数据源、股票池和风险配置
 data/                   SQLite 数据库
 src/
   strategies/           策略实现与家族聚合
+  custom_formulas.py    安全自定义公式解析与筛选
   panel.py              本地管理面板 API
   run_daily.py          每日任务编排
   database.py           SQLite 与历史追踪
@@ -309,6 +322,8 @@ logs/                   每日运行日志
 3. 在 `src/strategies/registry.py` 注册
 4. 为信号和家族聚合补充测试
 5. 更新 [策略说明](docs/STRATEGIES.md)
+
+新增自定义公式时，优先编辑 `config/custom_strategies.yml`，使用白名单字段和运算符；不要使用 `eval`、任意 Python 表达式或面板上传脚本。完整格式见 [策略说明](docs/STRATEGIES.md#自定义公式策略)。
 
 仓库内的 `AGENTS.md` 记录了模块边界、关键约束和验证命令，方便后续新会话快速接手。
 

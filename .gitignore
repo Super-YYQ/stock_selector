@@ -10,3 +10,4 @@ reports/
 .worktrees/
 data/*.db-*
 .env
+artifacts/

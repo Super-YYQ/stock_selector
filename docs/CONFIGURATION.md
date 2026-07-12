@@ -187,3 +187,27 @@ risk:
 ```
 
 保存后运行一次每日任务。若 YAML 字段名、类型或取值错误，程序会在日志中给出具体配置错误并停止，原数据库不会被删除。
+
+## 自定义公式配置
+
+位于 `config/custom_strategies.yml`。它与 `strategy.yml > strategies` 的内置加分策略分离：自定义公式只生成独立命中列表，不改变 Top 50 综合排名。
+
+| 参数 | 默认 / 可选值 | 作用 |
+|---|---|---|
+| `version` | `1` | 配置格式版本。 |
+| `strategies[].key` | 小写英文标识 | 公式唯一键。 |
+| `strategies[].enabled` | `true` / `false` | 是否执行。面板可修改。 |
+| `strategies[].match` | `all` / `any` | 全部条件或任一条件成立。 |
+| `strategies[].max_results` | `1` 至 `200` | 单条公式输出上限。 |
+| `strategies[].sort_by` | 默认 `total_score` | 命中股票排序字段。 |
+| `strategies[].sort_direction` | `asc` / `desc` | 排序方向。 |
+| `conditions[].field` | 共享特征字段 | 条件左值。 |
+| `conditions[].operator` | `gt`、`gte`、`lt`、`lte`、`eq`、`between` | 比较方式。 |
+| `conditions[].value` | 数值 | 固定比较值。 |
+| `conditions[].compare_field` | 共享特征字段 | 与另一个字段比较。 |
+| `conditions[].multiplier` | 默认 `1` | 比较字段乘数。 |
+| `conditions[].offset` | 默认 `0` | 比较字段偏移。 |
+| `conditions[].min` / `max` | 数值 | `between` 的闭区间。 |
+| `conditions[].label` | 中文短句 | 面板和报告中的可解释条件。 |
+
+安全边界：配置不支持 `eval`、Python 表达式、函数调用、动态导入或上传脚本。新增指标应在 `build_strategy_features` 中实现并补充测试。

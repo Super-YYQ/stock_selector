@@ -64,6 +64,7 @@ def test_write_excel_report_creates_required_sheets(tmp_path: Path) -> None:
         "Top10重点关注",
         "个股说明",
         "策略表现",
+        "自定义策略",
         "风险过滤名单",
         "原始评分明细",
     ]

@@ -29,6 +29,22 @@ strategies:
         encoding="utf-8",
     )
     (tmp_path / "config" / "stock_pool.yml").write_text("", encoding="utf-8")
+    (tmp_path / "config" / "custom_strategies.yml").write_text(
+        """
+version: 1
+strategies:
+  - key: test_formula
+    name: 测试公式
+    enabled: true
+    match: all
+    conditions:
+      - field: close
+        operator: gte
+        value: 10
+        label: 收盘价不低于10元
+""".strip(),
+        encoding="utf-8",
+    )
     (tmp_path / "site" / "data" / "latest.json").write_text(
         json.dumps({"report_date": "2026-06-22", "top50": []}, ensure_ascii=False),
         encoding="utf-8",
@@ -42,9 +58,11 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
     latest = panel.latest_report()
     status = panel.status()
     strategies = panel.strategies()
+    custom = panel.custom_strategies()
     updated = panel.update_strategies(
         panel.StrategyUpdate(enabled=["ma_volume", "sector_leader"], profile="custom")
     )
+    updated_custom = panel.update_custom_strategies(panel.CustomStrategyUpdate(enabled=[]))
     pool = panel.update_pool_config(
         panel.PoolConfigUpdate(
             min_list_days=180,
@@ -59,6 +77,8 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
     assert latest["report_date"] == "2026-06-22"
     assert "health" in status
     assert strategies["enabled"] == ["ma_volume"]
+    assert custom["catalog"][0]["key"] == "test_formula"
+    assert updated_custom["catalog"][0]["enabled"] is False
     assert updated["enabled"] == ["ma_volume", "sector_leader"]
     assert pool["min_list_days"] == 180
     assert pool["exclude_boards"] == ["北交所", "科创板"]

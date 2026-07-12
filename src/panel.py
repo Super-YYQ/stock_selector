@@ -23,6 +23,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.config import MARKET_BOARDS, MARKET_BOARD_OPTIONS, load_config
+from src.custom_formulas import (
+    FormulaConfigError,
+    load_custom_formulas,
+    public_formula_catalog,
+    update_custom_formula_enabled,
+)
 from src.database import Database
 from src.strategies.registry import STRATEGY_PROFILES, STRATEGY_REGISTRY, strategy_catalog
 
@@ -46,6 +52,10 @@ class RunRequest(BaseModel):
 class StrategyUpdate(BaseModel):
     enabled: list[str]
     profile: str = "custom"
+
+
+class CustomStrategyUpdate(BaseModel):
+    enabled: list[str]
 
 
 class PoolConfigUpdate(BaseModel):
@@ -143,6 +153,10 @@ def _latest_payload_path() -> Path:
     return ROOT / config.report.site_dir / "data" / "latest.json"
 
 
+def _custom_formula_path() -> Path:
+    return ROOT / "config" / "custom_strategies.yml"
+
+
 @app.get("/api/latest")
 def latest_report() -> Any:
     path = _latest_payload_path()
@@ -213,6 +227,44 @@ def update_strategies(update: StrategyUpdate) -> dict[str, Any]:
     )
     temporary.replace(path)
     return strategies()
+
+
+@app.get("/api/custom-strategies")
+def custom_strategies() -> dict[str, Any]:
+    try:
+        formulas = load_custom_formulas(_custom_formula_path())
+    except FormulaConfigError as exc:
+        raise HTTPException(status_code=500, detail=f"自定义公式配置错误: {exc}") from exc
+    reported: dict[str, dict[str, Any]] = {}
+    results: list[dict[str, Any]] = []
+    payload_path = _latest_payload_path()
+    if payload_path.exists():
+        try:
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            reported = {
+                str(item.get("key", "")): item
+                for item in payload.get("custom_strategies", [])
+                if item.get("key")
+            }
+            results = payload.get("custom_strategy_results", []) or []
+        except (OSError, json.JSONDecodeError):
+            LOGGER.warning("自定义公式读取最新报告失败，继续返回配置目录")
+    catalog = public_formula_catalog(formulas)
+    for item in catalog:
+        snapshot = reported.get(item["key"], {})
+        for key in ("matched_count", "status", "error"):
+            if key in snapshot:
+                item[key] = snapshot[key]
+    return {"catalog": catalog, "results": results}
+
+
+@app.put("/api/custom-strategies")
+def update_custom_strategies(update: CustomStrategyUpdate) -> dict[str, Any]:
+    try:
+        update_custom_formula_enabled(_custom_formula_path(), list(dict.fromkeys(update.enabled)))
+    except FormulaConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return custom_strategies()
 
 
 @app.get("/api/pool-config")

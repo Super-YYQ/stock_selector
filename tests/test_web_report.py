@@ -39,5 +39,7 @@ def test_static_report_writes_latest_and_history(tmp_path: Path) -> None:
     assert latest["report_date"] == "2026-06-22"
     assert latest["top50"][0]["name"] == "测试股票"
     assert latest["strategy_distribution"] == [{"strategy": "均线放量突破", "count": 1}]
+    assert latest["custom_strategies"] == []
+    assert latest["custom_strategy_results"] == []
     assert (tmp_path / "site" / "data" / "history" / "2026-06-22.json").exists()
     assert (tmp_path / "site" / "assets" / "app.css").exists()

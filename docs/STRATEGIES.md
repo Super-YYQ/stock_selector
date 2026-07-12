@@ -60,4 +60,50 @@
 
 每日 Top N 会写入 `selection_history`。后续交易日到来后，系统按入选日收盘价回填 1、3、5、10 日收益，并按命中策略统计平均收益和胜率。
 
+## 自定义公式策略
+
+自定义公式位于 `config/custom_strategies.yml`，用于生成独立观察池，不参与综合总分。系统只解释白名单字段和运算符，不执行任意 Python 代码。
+
+每条公式支持：
+
+| 字段 | 作用 |
+|---|---|
+| `key` | 唯一英文标识，仅小写字母、数字和下划线 |
+| `name` | 面板和 Excel 显示名称 |
+| `description` | 简短策略说明 |
+| `enabled` | 是否在盘后任务中执行 |
+| `match` | `all` 表示全部条件成立，`any` 表示任一条件成立 |
+| `max_results` | 单条公式最多保留 1 至 200 只股票 |
+| `sort_by` | 命中后排序字段，默认 `total_score` |
+| `sort_direction` | `asc` 或 `desc` |
+| `conditions` | 条件列表 |
+
+支持运算符：`gt`、`gte`、`lt`、`lte`、`eq`、`between`。条件可以与固定数值比较，也可以通过 `compare_field`、`multiplier` 和 `offset` 与另一个字段比较。
+
+常用字段包括：`open`、`high`、`low`、`close`、`pct_chg`、`ma5`、`ma10`、`ma20`、`ma60`、`high_20`、`high_60`、`amount_ratio`、`return_5d`、`return_10d`、`volatility_20d`、`distance_ma20`、`rps20`、`rps60`、`sector_score_raw`、`total_score`。
+
+示例：
+
+```yaml
+- key: volume_rps_resonance
+  name: 量价 RPS 共振
+  enabled: true
+  match: all
+  max_results: 30
+  sort_by: total_score
+  sort_direction: desc
+  conditions:
+    - field: close
+      operator: gte
+      compare_field: high_20
+      multiplier: 0.98
+      label: 收盘价位于20日高点附近
+    - field: amount_ratio
+      operator: gte
+      value: 1.2
+      label: 成交额不低于20日均额的1.2倍
+```
+
+收到新的 K 线图后，应先把形态拆成可验证条件，再决定是直接组合现有字段，还是在共享特征层补充新指标。单条公式配置异常会被记录并跳过，不应中断主报告。
+
 这些统计只描述历史样本，不应直接用于预测未来。

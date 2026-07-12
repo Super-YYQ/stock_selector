@@ -106,6 +106,22 @@ PERFORMANCE_COLUMNS = {
     "win_rate_10d": "10日胜率",
 }
 
+CUSTOM_FORMULA_COLUMNS = {
+    "formula_rank": "公式内排名",
+    "custom_strategy_name": "自定义公式",
+    "code": "股票代码",
+    "name": "股票名称",
+    "total_score": "综合分",
+    "industry": "所属行业",
+    "market_board": "市场板块",
+    "pct_chg": "今日涨跌幅",
+    "amount_ratio": "成交额放大倍数",
+    "rps20": "RPS20",
+    "distance_ma20": "距20日线",
+    "custom_reason": "公式命中原因",
+    "risk_tags": "风险提示",
+}
+
 FILTER_COLUMNS = {
     "code": "股票代码",
     "name": "股票名称",
@@ -151,6 +167,7 @@ def _fit_columns(ws) -> None:
         "风险提示",
         "过滤原因",
         "强势原因",
+        "公式命中原因",
     }
     for column in range(1, ws.max_column + 1):
         header = str(ws.cell(row=1, column=column).value or "")
@@ -167,7 +184,7 @@ def _fit_columns(ws) -> None:
 
 def _style_data_sheet(ws) -> None:
     _style_header(ws)
-    ws.freeze_panes = "D2" if ws.title in {"Top50观察名单", "Top10重点关注", "个股说明"} else "A2"
+    ws.freeze_panes = "D2" if ws.title in {"Top50观察名单", "Top10重点关注", "个股说明", "自定义策略"} else "A2"
     ws.sheet_view.showGridLines = False
     ws.auto_filter.ref = ws.dimensions
     headers = {str(cell.value): cell.column for cell in ws[1] if cell.value is not None}
@@ -187,6 +204,7 @@ def _style_data_sheet(ws) -> None:
         "完整风险提示",
         "过滤原因",
         "强势原因",
+        "公式命中原因",
     }
     wrap_columns = {column for header, column in headers.items() if header in wrap_headers}
     thin = Side(style="hair", color=COLORS["line"])
@@ -315,11 +333,13 @@ def write_excel_report(
     filtered: pd.DataFrame,
     strategy_performance: pd.DataFrame | None = None,
     health: dict[str, object] | None = None,
+    custom_strategy_results: pd.DataFrame | None = None,
 ) -> Path:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     path = output / f"{report_date}_盘后选股报告.xlsx"
     performance = strategy_performance if strategy_performance is not None else pd.DataFrame()
+    custom_results = custom_strategy_results if custom_strategy_results is not None else pd.DataFrame()
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         _write_market_sheet(writer, report_date, market, health or {})
         _rename_existing(strong_sectors, SECTOR_COLUMNS).head(30).to_excel(writer, sheet_name="强势板块", index=False)
@@ -327,10 +347,11 @@ def write_excel_report(
         _rename_existing(top10, TOP10_COLUMNS).to_excel(writer, sheet_name="Top10重点关注", index=False)
         _rename_existing(top50, DETAIL_COLUMNS).to_excel(writer, sheet_name="个股说明", index=False)
         _rename_existing(performance, PERFORMANCE_COLUMNS).to_excel(writer, sheet_name="策略表现", index=False)
+        _rename_existing(custom_results, CUSTOM_FORMULA_COLUMNS).to_excel(writer, sheet_name="自定义策略", index=False)
         _rename_existing(filtered, FILTER_COLUMNS).to_excel(writer, sheet_name="风险过滤名单", index=False)
         ranked.to_excel(writer, sheet_name="原始评分明细", index=False)
 
-        for name in ["强势板块", "Top50观察名单", "Top10重点关注", "个股说明", "策略表现", "风险过滤名单", "原始评分明细"]:
+        for name in ["强势板块", "Top50观察名单", "Top10重点关注", "个股说明", "策略表现", "自定义策略", "风险过滤名单", "原始评分明细"]:
             _style_data_sheet(writer.sheets[name])
         tab_colors = {
             "市场环境": COLORS["header"],
@@ -338,6 +359,7 @@ def write_excel_report(
             "Top50观察名单": COLORS["green"],
             "Top10重点关注": COLORS["accent"],
             "个股说明": COLORS["muted"],
+            "自定义策略": COLORS["header"],
             "风险过滤名单": COLORS["red"],
         }
         for name, color in tab_colors.items():

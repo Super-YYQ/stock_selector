@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.build_pool import build_stock_pool
 from src.config import AppConfig, load_config
+from src.custom_formulas import FormulaConfigError, evaluate_custom_formulas
 from src.database import Database
 from src.fetch_data import (
     TDX_PRICE_BASIS,
@@ -39,6 +40,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="A 股盘后多因子选股助手")
     parser.add_argument("--init", action="store_true", help="初始化并回填历史数据")
     parser.add_argument("--date", help="指定报告日期，格式 YYYY-MM-DD")
+    parser.add_argument("--offline", action="store_true", help="仅使用本地数据库重算策略和报告，不连接行情源")
     return parser.parse_args(argv)
 
 
@@ -469,6 +471,8 @@ def run(argv: list[str] | None = None) -> Path | None:
             logger.info("初始化模式已启动，开始更新免费数据源")
             update_market_data(db, config, preliminary_date, init=True)
             validate_initialization(db, config)
+        elif args.offline:
+            logger.info("离线重算模式已启动，跳过行情更新并使用现有本地数据")
         elif not existing_basic.empty:
             logger.info("开始执行每日增量数据更新")
             update_market_data(db, config, preliminary_date, init=False)
@@ -540,6 +544,22 @@ def run(argv: list[str] | None = None) -> Path | None:
             ranked = enrich_ranked_context(db, ranked, report_date, config.features)
         except Exception as exc:
             logger.warning("个股行业与题材说明更新失败，继续使用基础评分结果: %s", exc)
+        custom_strategies: list[dict[str, Any]] = []
+        custom_strategy_results = pd.DataFrame()
+        try:
+            custom_strategies, custom_strategy_results = evaluate_custom_formulas(
+                stock_daily,
+                report_date,
+                ranked,
+                Path("config") / "custom_strategies.yml",
+            )
+            logger.info(
+                "自定义公式筛选完成：%s 个公式，%s 条命中记录",
+                len(custom_strategies),
+                len(custom_strategy_results),
+            )
+        except (FormulaConfigError, OSError, ValueError) as exc:
+            logger.warning("自定义公式配置异常，已跳过且不影响主任务: %s", exc)
         top50 = ranked.head(config.report.top_observe).copy()
         top10 = ranked.head(config.report.top_focus).copy()
 
@@ -560,6 +580,7 @@ def run(argv: list[str] | None = None) -> Path | None:
             filtered,
             strategy_performance=performance,
             health=health,
+            custom_strategy_results=custom_strategy_results,
         )
         payload = build_report_payload(
             report_date,
@@ -569,6 +590,8 @@ def run(argv: list[str] | None = None) -> Path | None:
             top10,
             performance,
             health,
+            custom_strategies=custom_strategies,
+            custom_strategy_results=custom_strategy_results,
         )
         html_path = write_static_report(
             config.report.site_dir,

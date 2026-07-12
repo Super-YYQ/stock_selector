@@ -5,17 +5,24 @@
     payload: null,
     status: null,
     strategies: null,
+    customStrategies: null,
     pool: null,
     mode: "local",
     listName: "top50",
     search: "",
-    board: ""
+    board: "",
+    focusSearch: "",
+    focusBoard: "",
+    focusStockCode: "",
+    activeCustomKey: "",
+    customSearch: ""
   };
 
   var viewMeta = {
     overview: ["盘后复盘", "市场概览"],
     watchlist: ["综合排序", "观察名单"],
-    strategies: ["规则配置", "策略与股票池"],
+    custom: ["公式筛选", "自定义策略"],
+    strategies: ["规则配置", "策略配置"],
     system: ["数据与任务", "运行状态"]
   };
 
@@ -94,6 +101,7 @@
         state.mode = "static";
         state.status = null;
         state.strategies = null;
+        state.customStrategies = null;
         state.pool = null;
         document.body.classList.add("static-mode");
       } catch (staticError) {
@@ -110,11 +118,13 @@
     var results = await Promise.allSettled([
       request("/api/status"),
       request("/api/strategies"),
-      request("/api/pool-config")
+      request("/api/pool-config"),
+      request("/api/custom-strategies")
     ]);
     if (results[0].status === "fulfilled") state.status = results[0].value;
     if (results[1].status === "fulfilled") state.strategies = results[1].value;
     if (results[2].status === "fulfilled") state.pool = results[2].value;
+    if (results[3].status === "fulfilled") state.customStrategies = results[3].value;
   }
 
   function setConnection(kind, label) {
@@ -127,6 +137,7 @@
     byId("report-date").textContent = "暂无报告";
     byId("focus-table").innerHTML = '<tbody><tr><td class="empty-state">请先执行初始化或每日任务</td></tr></tbody>';
     byId("watchlist-table").innerHTML = '<tbody><tr><td class="empty-state">暂无观察名单</td></tr></tbody>';
+    byId("custom-results-table").innerHTML = '<tbody><tr><td class="empty-state">暂无自定义策略结果</td></tr></tbody>';
   }
 
   function renderAll() {
@@ -135,6 +146,8 @@
     var health = payload.health || {};
     var upRatio = Number(market.up_ratio);
     byId("report-date").textContent = payload.report_date || "--";
+    byId("brief-date").textContent = payload.report_date || "--";
+    byId("sidebar-date").textContent = "数据截止 " + (payload.report_date || "--");
     byId("generated-at").textContent = payload.generated_at ? "生成于 " + payload.generated_at.replace("T", " ") : "--";
     byId("kpi-market").textContent = market.market_label || "--";
     byId("kpi-risk").textContent = "风险 " + (market.risk_level || "--");
@@ -145,18 +158,55 @@
     byId("kpi-symbols").textContent = (health.covered_symbols || health.latest_symbol_count || 0) + " 只";
     byId("market-score-large").textContent = number(market.market_score, 1);
     byId("market-score-bar").style.width = Math.max(0, Math.min(100, Number(market.market_score || 0) * 10)) + "%";
+    byId("evidence-score").textContent = number(market.market_score, 1);
+    byId("evidence-up").textContent = Number.isFinite(upRatio) ? number(upRatio, 1) + "%" : "--";
+    byId("evidence-limit").textContent = "上涨 " + (market.limit_up_count || 0) + " / 下跌 " + (market.limit_down_count || 0);
+    byId("evidence-symbols").textContent = (health.covered_symbols || health.latest_symbol_count || 0) + " 只";
+    byId("evidence-coverage").textContent = "数据覆盖 " + number(Number(health.stock_coverage || 0) * 100, 1) + "%";
+    byId("evidence-temperature").textContent = number(market.market_score, 1);
+    byId("evidence-bar").style.width = Math.max(0, Math.min(100, Number(market.market_score || 0) * 10)) + "%";
     var risk = byId("market-risk-badge");
     risk.textContent = "风险 " + (market.risk_level || "--");
-    risk.className = "risk-badge " + (market.risk_level === "高" ? "high" : market.risk_level === "低" ? "low" : "");
+    risk.className = "risk-inline " + (market.risk_level === "高" ? "high" : market.risk_level === "低" ? "low" : "");
+    renderMarketGuidance(market, payload.strong_sectors || []);
     renderIndexes(market.index_changes || {});
+    renderEvidenceIndexes(market.index_changes || {});
     renderSectors(payload.strong_sectors || []);
     renderFocus(payload.top10 || []);
     renderWatchlist();
+    renderCustomStrategies();
     renderStrategies();
     renderPool();
     renderPerformance(payload.strategy_performance || []);
     renderSystem();
     icons();
+  }
+
+  function renderMarketGuidance(market, sectors) {
+    var label = market.market_label || "震荡";
+    var guidance = label === "偏强"
+      ? "市场环境偏强，聚焦主线板块的量价确认，避免连续加速后的追高。"
+      : label === "偏弱"
+        ? "市场偏弱、量能收缩。高估值与资金博弈加剧，控制仓位，聚焦强势结构与业绩线索。"
+        : "市场维持震荡，优先等待板块和个股形成共振，减少方向不明时的试错。";
+    byId("market-guidance").textContent = guidance;
+    var sectorName = sectors.length ? (sectors[0].sector_name || sectors[0].industry || "强势板块") : "强势板块";
+    var guardrails = [
+      "关注" + sectorName + "延续性与量能配合",
+      label === "偏弱" ? "回避跌幅靠前及量能放大的弱势方向" : "观察领涨股回踩后的承接强度",
+      "设好止损，保留现金与盘中调整空间"
+    ];
+    byId("guardrail-list").innerHTML = guardrails.map(function (item) {
+      return "<li>" + escapeHtml(item) + "</li>";
+    }).join("");
+  }
+
+  function renderEvidenceIndexes(changes) {
+    var labels = { sh000001: "上证指数", sz399001: "深证成指", sz399006: "创业板指" };
+    byId("evidence-index-grid").innerHTML = Object.keys(labels).map(function (code) {
+      var change = Number(changes[code] || 0);
+      return '<div><span>' + labels[code] + '</span><strong class="' + valueClass(change) + '">' + pct(change) + "</strong></div>";
+    }).join("");
   }
 
   function renderIndexes(changes) {
@@ -170,10 +220,10 @@
 
   function renderSectors(items) {
     byId("sector-count").textContent = items.length + " 个板块";
-    byId("sector-list").innerHTML = items.slice(0, 8).map(function (item) {
+    byId("sector-list").innerHTML = items.slice(0, 8).map(function (item, index) {
       var score = Number(item.sector_score_raw || 0);
       return '<div class="sector-item" title="' + escapeHtml(item.sector_reason || "") + '">' +
-        '<strong>' + escapeHtml(item.sector_name || item.industry || "--") + '</strong>' +
+        '<b>' + (index + 1) + '</b><strong>' + escapeHtml(item.sector_name || item.industry || "--") + '</strong>' +
         '<span class="sector-bar"><span style="width:' + Math.max(3, Math.min(100, score)) + '%"></span></span>' +
         '<em class="' + valueClass(item.pct_chg) + '">' + pct(item.pct_chg) + "</em></div>";
     }).join("") || '<div class="empty-state">暂无板块数据</div>';
@@ -211,7 +261,7 @@
 
   function signalCell(value, row) {
     var source = row.reason_tags || row.selection_reason_short || row.matched_strategies || "";
-    var tags = splitTags(source, 3);
+    var tags = splitTags(source, 2);
     if (!tags.length) tags = ["规则入选"];
     return tagHtml(tags, "");
   }
@@ -219,7 +269,7 @@
   function riskCell(value, row) {
     var tags = splitTags(row.risk_tags, 2);
     if (!tags.length && Number(row.risk_penalty || 0) > 0) tags = ["扣 " + number(row.risk_penalty, 1) + " 分"];
-    if (!tags.length) return '<span class="tag">风险较低</span>';
+    if (!tags.length) return '<span class="risk-quiet">--</span>';
     return tagHtml(tags, "risk");
   }
 
@@ -231,12 +281,11 @@
   var focusColumns = [
     { key: "rank", label: "#", className: function (v) { return "rank-cell " + (Number(v) <= 3 ? "top" : ""); } },
     { key: "name", label: "股票", format: stockIdentity },
-    { key: "total_score", label: "总分", className: function () { return "score-cell"; }, format: function (v) { return number(v, 2); } },
     { key: "industry", label: "行业 / 题材", format: contextCell },
-    { key: "pct_chg", label: "今日", className: valueClass, format: pct },
-    { key: "reason_tags", label: "入选信号", className: function () { return "signal-cell"; }, format: signalCell },
-    { key: "risk_tags", label: "风险", format: riskCell },
-    { key: "code", label: "", format: detailButton }
+    { key: "total_score", label: "综合分", className: function () { return "score-cell"; }, format: function (v) { return number(v, 2); } },
+    { key: "pct_chg", label: "今日涨跌", className: valueClass, format: pct },
+    { key: "amount_ratio", label: "量比", format: function (v) { return number(v, 2) + "x"; } },
+    { key: "market_board", label: "所属板块" }
   ];
 
   var watchColumns = [
@@ -254,8 +303,77 @@
   ];
 
   function renderFocus(rows) {
-    byId("focus-table").innerHTML = tableHtml(focusColumns, rows);
+    var query = state.focusSearch.trim().toLowerCase();
+    var filtered = rows.filter(function (row) {
+      if (state.focusBoard && String(row.market_board || row.industry || "") !== state.focusBoard) return false;
+      if (!query) return true;
+      return [row.code, row.name, row.industry, row.sector, row.market_board, row.concepts].some(function (value) {
+        return String(value || "").toLowerCase().indexOf(query) >= 0;
+      });
+    });
+    byId("focus-table").innerHTML = tableHtml(focusColumns, filtered);
     bindDetailButtons(byId("focus-table"));
+    if (!filtered.length) {
+      renderFocusInspector(null);
+      return;
+    }
+    if (!filtered.some(function (row) { return String(row.code) === String(state.focusStockCode); })) {
+      state.focusStockCode = String(filtered[0].code || "");
+    }
+    Array.prototype.slice.call(byId("focus-table").querySelectorAll("tbody tr")).forEach(function (rowNode, index) {
+      var row = filtered[index];
+      if (!row) return;
+      rowNode.dataset.code = row.code;
+      rowNode.classList.toggle("selected", String(row.code) === String(state.focusStockCode));
+      rowNode.addEventListener("click", function (event) {
+        if (event.target.closest("button")) return;
+        state.focusStockCode = String(row.code || "");
+        renderFocus(filtered);
+      });
+    });
+    renderFocusInspector(filtered.find(function (row) {
+      return String(row.code) === String(state.focusStockCode);
+    }) || filtered[0]);
+  }
+
+  function renderFocusInspector(row) {
+    if (!row) {
+      byId("focus-stock-name").textContent = "暂无匹配股票";
+      byId("focus-stock-subtitle").textContent = "--";
+      byId("focus-stock-board").textContent = "--";
+      byId("focus-stock-score").textContent = "--";
+      byId("focus-stock-change").textContent = "--";
+      byId("focus-stock-metrics").innerHTML = "";
+      byId("focus-stock-signals").textContent = "--";
+      byId("focus-stock-reason").textContent = "--";
+      byId("focus-stock-concepts").innerHTML = "";
+      byId("focus-stock-condition").textContent = "--";
+      byId("focus-stock-detail").dataset.code = "";
+      return;
+    }
+    byId("focus-stock-name").textContent = row.name || "--";
+    byId("focus-stock-subtitle").textContent = String(row.code || "").padStart(6, "0") + " · " + (row.industry || row.sector || "--");
+    byId("focus-stock-board").textContent = row.market_board || "--";
+    byId("focus-stock-score").textContent = number(row.total_score, 2);
+    byId("focus-stock-change").textContent = pct(row.pct_chg);
+    byId("focus-stock-change").className = valueClass(row.pct_chg);
+    var metrics = [
+      ["量比", number(row.amount_ratio, 2) + "x"],
+      ["RPS20", number(row.rps20, 0)],
+      ["风险扣分", number(row.risk_penalty, 1)]
+    ];
+    byId("focus-stock-metrics").innerHTML = metrics.map(function (item) {
+      return "<div><dt>" + item[0] + "</dt><dd>" + escapeHtml(item[1]) + "</dd></div>";
+    }).join("");
+    var signals = splitTags(row.reason_tags || row.matched_strategies, 4);
+    byId("focus-stock-signals").textContent = signals.join(" · ") || "规则入选";
+    byId("focus-stock-reason").textContent = row.selection_reason_short || row.selection_reason || "--";
+    byId("focus-stock-concepts").innerHTML = splitTags(row.concepts, 6).map(function (item) {
+      return '<span class="tag">' + escapeHtml(item) + "</span>";
+    }).join("");
+    byId("focus-stock-condition").textContent = row.next_day_condition || "--";
+    byId("focus-stock-detail").dataset.code = String(row.code || "");
+    icons();
   }
 
   function renderWatchlist() {
@@ -282,7 +400,9 @@
 
   function findStock(code) {
     var payload = state.payload || {};
-    return (payload.top50 || []).concat(payload.top10 || []).find(function (row) {
+    var customResults = state.customStrategies && state.customStrategies.results
+      ? state.customStrategies.results : (payload.custom_strategy_results || []);
+    return (payload.top50 || []).concat(payload.top10 || [], customResults).find(function (row) {
       return String(row.code || "") === String(code || "");
     });
   }
@@ -344,6 +464,107 @@
       button.addEventListener("click", function () { openDrawer(button.dataset.detail); });
     });
   }
+
+  var customColumns = [
+    { key: "formula_rank", label: "#", className: function (v) { return "rank-cell " + (Number(v) <= 3 ? "top" : ""); } },
+    { key: "name", label: "股票", format: stockIdentity },
+    { key: "total_score", label: "综合分", className: function () { return "score-cell"; }, format: function (v) { return number(v, 2); } },
+    { key: "industry", label: "行业 / 题材", format: contextCell },
+    { key: "pct_chg", label: "今日", className: valueClass, format: pct },
+    { key: "amount_ratio", label: "量比", format: function (v) { return number(v, 2) + "x"; } },
+    { key: "rps20", label: "RPS20", format: function (v) { return number(v, 0); } },
+    { key: "custom_reason", label: "命中摘要", className: function () { return "signal-cell"; }, format: function (v, row) {
+      return '<span class="formula-hit-summary">量比 ' + number(row.amount_ratio, 2) + 'x · RPS20 ' +
+        number(row.rps20, 0) + ' · 距20日线 ' + number(row.distance_ma20, 1) + '%</span>';
+    } },
+    { key: "code", label: "", format: detailButton }
+  ];
+
+  function customSource() {
+    var payload = state.payload || {};
+    return state.customStrategies || {
+      catalog: payload.custom_strategies || [],
+      results: payload.custom_strategy_results || []
+    };
+  }
+
+  function renderCustomStrategies() {
+    var source = customSource();
+    var catalog = source.catalog || [];
+    var results = source.results || [];
+    byId("custom-formula-count").textContent = catalog.length + " 个";
+    if (!catalog.length) {
+      byId("custom-formula-list").innerHTML = '<div class="empty-state">暂无自定义公式</div>';
+      byId("custom-result-title").textContent = "自定义策略结果";
+      byId("custom-result-description").textContent = "--";
+      byId("custom-formula-summary").textContent = "暂无公式定义";
+      byId("custom-match-count").textContent = "0";
+      byId("custom-results-table").innerHTML = tableHtml(customColumns, []);
+      return;
+    }
+    if (!catalog.some(function (item) { return item.key === state.activeCustomKey; })) {
+      state.activeCustomKey = catalog[0].key;
+    }
+    byId("custom-formula-list").innerHTML = catalog.map(function (item) {
+      var active = item.key === state.activeCustomKey;
+      var disabled = !item.enabled;
+      var count = Number(item.matched_count || 0);
+      return '<article class="formula-item ' + (active ? "active " : "") + (disabled ? "disabled" : "") + '">' +
+        '<button type="button" data-custom-formula="' + escapeHtml(item.key) + '"><h3>' + escapeHtml(item.name) +
+        '</h3><p>' + escapeHtml(item.description || item.formula_summary || "--") + '</p><small>' +
+        (item.status === "error" ? "配置异常" : count + " 只命中") + '</small></button>' +
+        '<label class="switch local-only" title="启用或停用"><input type="checkbox" data-custom-enabled="' +
+        escapeHtml(item.key) + '" ' + (item.enabled ? "checked" : "") + '><span></span></label></article>';
+    }).join("");
+    all("[data-custom-formula]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.activeCustomKey = button.dataset.customFormula;
+        renderCustomStrategies();
+      });
+    });
+    all("[data-custom-enabled]").forEach(function (input) {
+      input.addEventListener("change", function () {
+        input.closest(".formula-item").classList.toggle("disabled", !input.checked);
+      });
+    });
+
+    var activeFormula = catalog.find(function (item) { return item.key === state.activeCustomKey; }) || catalog[0];
+    var query = state.customSearch.trim().toLowerCase();
+    var rows = results.filter(function (row) {
+      if (String(row.custom_strategy_key || "") !== String(activeFormula.key || "")) return false;
+      if (!query) return true;
+      return [row.code, row.name, row.industry, row.sector, row.market_board, row.concepts, row.custom_reason].some(function (value) {
+        return String(value || "").toLowerCase().indexOf(query) >= 0;
+      });
+    });
+    byId("custom-result-title").textContent = activeFormula.name || "自定义策略结果";
+    byId("custom-result-description").textContent = activeFormula.description || "--";
+    byId("custom-formula-summary").textContent = activeFormula.error || activeFormula.formula_summary || "--";
+    byId("custom-match-count").textContent = rows.length;
+    byId("custom-results-table").innerHTML = tableHtml(customColumns, rows);
+    bindDetailButtons(byId("custom-results-table"));
+    icons();
+  }
+
+  async function saveCustomStrategies() {
+    var enabled = all("[data-custom-enabled]:checked").map(function (input) { return input.dataset.customEnabled; });
+    var button = byId("save-custom-strategies-button");
+    button.disabled = true;
+    try {
+      state.customStrategies = await request("/api/custom-strategies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: enabled })
+      });
+      renderCustomStrategies();
+      toast("自定义公式启用状态已保存，下次任务生效");
+    } catch (error) {
+      toast("保存失败：" + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function renderStrategies() {
     var grid = byId("strategy-grid");
     if (state.strategies && state.strategies.catalog) {
@@ -577,8 +798,21 @@
       state.board = event.target.value;
       renderWatchlist();
     });
+    byId("focus-search").addEventListener("input", function (event) {
+      state.focusSearch = event.target.value;
+      renderFocus((state.payload && state.payload.top10) || []);
+    });
+    byId("focus-board-filter").addEventListener("change", function (event) {
+      state.focusBoard = event.target.value;
+      renderFocus((state.payload && state.payload.top10) || []);
+    });
+    byId("custom-search").addEventListener("input", function (event) {
+      state.customSearch = event.target.value;
+      renderCustomStrategies();
+    });
     byId("refresh-button").addEventListener("click", load);
     byId("save-strategies-button").addEventListener("click", saveStrategies);
+    byId("save-custom-strategies-button").addEventListener("click", saveCustomStrategies);
     byId("save-pool-button").addEventListener("click", savePool);
     byId("run-button").addEventListener("click", function () { startRun(); });
     byId("quick-run-button").addEventListener("click", function () { startRun("daily"); });
@@ -596,6 +830,10 @@
     });
     byId("drawer-close").addEventListener("click", closeDrawer);
     byId("drawer-backdrop").addEventListener("click", closeDrawer);
+    byId("focus-stock-detail").addEventListener("click", function (event) {
+      var code = event.currentTarget.dataset.code;
+      if (code) openDrawer(code);
+    });
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape") closeDrawer();
     });

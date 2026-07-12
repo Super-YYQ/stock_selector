@@ -3,84 +3,121 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#172522">
+  <meta name="theme-color" content="#151d1b">
   <title>A股盘后选股助手</title>
-  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/app.css?v=20260712-4">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark">A</span>
-        <span><strong>盘后选股助手</strong><small>本地观察台</small></span>
+        <span><strong>盘后选股助手</strong><small>A股 · 盘后</small></span>
       </div>
       <nav class="nav-list" aria-label="主导航">
         <button class="nav-item active" data-view="overview"><i data-lucide="layout-dashboard"></i><span>市场概览</span></button>
         <button class="nav-item" data-view="watchlist"><i data-lucide="list-filter"></i><span>观察名单</span></button>
-        <button class="nav-item" data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>策略与股票池</span></button>
+        <button class="nav-item" data-view="custom"><i data-lucide="braces"></i><span>自定义策略</span></button>
+        <button class="nav-item" data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>策略配置</span></button>
         <button class="nav-item" data-view="system"><i data-lucide="activity"></i><span>运行状态</span></button>
       </nav>
       <div class="sidebar-foot">
-        <span class="status-dot" id="sidebar-status-dot"></span>
-        <span id="sidebar-status">正在读取数据</span>
+        <span><i class="status-dot" id="sidebar-status-dot"></i><span id="sidebar-status">正在读取数据</span></span>
+        <small id="sidebar-date">数据截止 --</small>
       </div>
     </aside>
 
     <div class="workspace">
       <header class="topbar">
-        <div>
-          <p class="page-context" id="view-context">盘后复盘</p>
-          <h1 id="view-title">市场概览</h1>
-        </div>
-        <div class="topbar-actions">
+        <div class="title-row">
+          <div>
+            <p class="page-context" id="view-context">盘后复盘</p>
+            <h1 id="view-title">市场概览</h1>
+          </div>
           <span class="report-date" id="report-date">--</span>
           <button class="icon-button" id="refresh-button" title="刷新数据" aria-label="刷新数据"><i data-lucide="refresh-cw"></i></button>
+        </div>
+        <div class="topbar-actions">
+          <button class="ghost-button local-only" id="download-report-button"><i data-lucide="download"></i><span>下载日报</span></button>
           <button class="primary-button local-only" id="quick-run-button"><i data-lucide="play"></i><span>执行盘后任务</span></button>
         </div>
       </header>
 
       <main>
         <section class="view active" id="view-overview">
-          <div class="market-strip">
-            <div><span>市场状态</span><strong id="kpi-market">--</strong><small id="kpi-risk">风险 --</small></div>
-            <div><span>市场评分</span><strong id="kpi-score">--</strong><small>满分 10</small></div>
-            <div><span>上涨占比</span><strong id="kpi-up-ratio">--</strong><small id="kpi-limit">涨停 -- / 跌停 --</small></div>
-            <div><span>观察范围</span><strong id="kpi-symbols">--</strong><small id="kpi-coverage">覆盖 --</small></div>
-          </div>
-
-          <div class="overview-grid">
-            <section class="panel market-panel">
-              <div class="section-heading">
-                <div><span class="section-label">市场温度</span><h2>主要指数与风险</h2></div>
-                <span class="risk-badge" id="market-risk-badge">--</span>
+          <div class="overview-workbench">
+            <aside class="daily-brief">
+              <div class="brief-intro">
+                <span class="section-label">每日简报 · <b id="brief-date">--</b></span>
+                <p class="market-guidance" id="market-guidance">正在读取市场结论</p>
               </div>
-              <div class="market-score-row">
-                <div class="score-number"><strong id="market-score-large">--</strong><span>/ 10</span></div>
-                <div class="score-track"><span id="market-score-bar"></span></div>
-              </div>
-              <div class="index-grid" id="index-grid"></div>
-            </section>
+              <section class="brief-section guardrail-section">
+                <h2>明日关注三条</h2>
+                <ol class="guardrail-list" id="guardrail-list"></ol>
+              </section>
+              <section class="brief-section brief-market">
+                <div class="inline-heading"><h2>市场状态</h2><span class="risk-inline" id="market-risk-badge">风险 --</span></div>
+                <div class="brief-metrics">
+                  <div><span>市场评分</span><strong id="market-score-large">--</strong><small>/ 10</small></div>
+                  <div><span>上涨占比</span><strong id="kpi-up-ratio">--</strong><small id="kpi-limit">涨停 -- / 跌停 --</small></div>
+                  <div><span>观察范围</span><strong id="kpi-symbols">--</strong><small id="kpi-coverage">覆盖 --</small></div>
+                  <div><span>市场温度</span><strong id="kpi-score">--</strong><span class="mini-track"><i id="market-score-bar"></i></span></div>
+                </div>
+                <span class="visually-hidden" id="kpi-market">--</span>
+                <span class="visually-hidden" id="kpi-risk">风险 --</span>
+              </section>
+              <section class="brief-section">
+                <h2>主要指数与风险</h2>
+                <div class="index-ledger" id="index-grid"></div>
+              </section>
+              <section class="brief-section sector-brief">
+                <div class="inline-heading"><h2>板块强度</h2><span id="sector-count">--</span></div>
+                <div class="sector-list" id="sector-list"></div>
+              </section>
+            </aside>
 
-            <section class="panel sector-panel">
-              <div class="section-heading">
-                <div><span class="section-label">板块观察</span><h2>强势行业与市场板</h2></div>
-                <span class="muted" id="sector-count">--</span>
+            <div class="overview-main">
+              <div class="market-evidence">
+                <div><span>市场评分</span><strong id="evidence-score">--</strong><small>/ 10</small></div>
+                <div><span>上涨占比</span><strong id="evidence-up">--</strong><small id="evidence-limit">--</small></div>
+                <div><span>观察范围</span><strong id="evidence-symbols">--</strong><small id="evidence-coverage">--</small></div>
+                <div class="evidence-indexes"><span>主要指数与风险</span><div id="evidence-index-grid"></div></div>
+                <div class="evidence-temperature"><span>市场温度</span><strong id="evidence-temperature">--</strong><small>/ 10</small><i><b id="evidence-bar"></b></i></div>
               </div>
-              <div class="sector-list" id="sector-list"></div>
-            </section>
-          </div>
 
-          <section class="panel table-panel">
-            <div class="section-heading">
-              <div><span class="section-label">重点观察</span><h2>Top 10</h2></div>
-              <button class="text-button" data-goto="watchlist">完整名单 <i data-lucide="arrow-right"></i></button>
+              <div class="focus-workspace">
+                <section class="focus-list-surface">
+                  <div class="focus-toolbar">
+                    <div><span class="section-label">重点观察</span><h2>Top 10 观察名单</h2></div>
+                    <div class="compact-filters">
+                      <label class="search-box compact"><i data-lucide="search"></i><input id="focus-search" placeholder="代码、名称、行业或概念" autocomplete="off"></label>
+                      <select id="focus-board-filter" aria-label="重点名单市场板块筛选">
+                        <option value="">全部市场</option>
+                        <option>沪市主板</option><option>深市主板</option><option>创业板</option><option>科创板</option><option>北交所</option><option>其他</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="table-wrap focus-table-wrap"><table id="focus-table"></table></div>
+                  <div class="table-footer"><span>按综合评分排序</span><button class="text-button" data-goto="watchlist">查看完整观察名单 <i data-lucide="arrow-right"></i></button></div>
+                </section>
+
+                <aside class="stock-inspector" id="focus-inspector">
+                  <header><div><h2 id="focus-stock-name">--</h2><p id="focus-stock-subtitle">--</p></div><span id="focus-stock-board">--</span></header>
+                  <div class="inspector-score"><strong id="focus-stock-score">--</strong><em id="focus-stock-change">--</em></div>
+                  <dl class="inspector-metrics" id="focus-stock-metrics"></dl>
+                  <section><h3>核心驱动</h3><div class="signal-summary" id="focus-stock-signals"></div></section>
+                  <section><h3>关键说明</h3><p id="focus-stock-reason">--</p></section>
+                  <section><h3>所属概念</h3><div class="tag-list concepts" id="focus-stock-concepts"></div></section>
+                  <section><h3>次日观察</h3><p id="focus-stock-condition">--</p></section>
+                  <button class="text-button inspector-detail" id="focus-stock-detail">查看完整说明 <i data-lucide="arrow-right"></i></button>
+                </aside>
+              </div>
             </div>
-            <div class="table-wrap"><table id="focus-table"></table></div>
-          </section>
+          </div>
         </section>
 
-        <section class="view" id="view-watchlist">
-          <div class="toolbar">
+        <section class="view page-view" id="view-watchlist">
+          <div class="toolbar page-toolbar">
             <div class="segmented" role="tablist">
               <button class="active" data-list="top50">Top 50</button>
               <button data-list="top10">Top 10</button>
@@ -88,17 +125,11 @@
             <label class="search-box"><i data-lucide="search"></i><input id="stock-search" placeholder="代码、名称、行业或概念" autocomplete="off"></label>
             <select id="board-filter" aria-label="市场板块筛选">
               <option value="">全部市场板块</option>
-              <option>沪市主板</option>
-              <option>深市主板</option>
-              <option>创业板</option>
-              <option>科创板</option>
-              <option>北交所</option>
-              <option>其他</option>
+              <option>沪市主板</option><option>深市主板</option><option>创业板</option><option>科创板</option><option>北交所</option><option>其他</option>
             </select>
-            <button class="secondary-button local-only" id="download-report-button"><i data-lucide="file-spreadsheet"></i><span>Excel</span></button>
           </div>
-          <section class="panel table-panel watchlist-panel">
-            <div class="section-heading">
+          <section class="data-surface watchlist-panel">
+            <div class="surface-heading">
               <div><span class="section-label">综合排序</span><h2 id="watchlist-heading">Top 50 观察名单</h2></div>
               <span class="muted" id="watchlist-count">--</span>
             </div>
@@ -106,77 +137,62 @@
           </section>
         </section>
 
-        <section class="view" id="view-strategies">
+        <section class="view page-view" id="view-custom">
+          <div class="custom-layout">
+            <aside class="formula-index">
+              <div class="surface-heading"><div><span class="section-label">自定义公式</span><h2>公式目录</h2></div><span class="muted" id="custom-formula-count">--</span></div>
+              <div class="formula-list" id="custom-formula-list"></div>
+              <button class="secondary-button local-only" id="save-custom-strategies-button"><i data-lucide="save"></i><span>保存启用状态</span></button>
+            </aside>
+            <section class="custom-results">
+              <div class="custom-result-header">
+                <div><span class="section-label">当日命中</span><h2 id="custom-result-title">自定义策略结果</h2><p id="custom-result-description">--</p></div>
+                <div class="custom-result-count"><strong id="custom-match-count">0</strong><span>只股票</span></div>
+              </div>
+              <div class="formula-summary" id="custom-formula-summary">--</div>
+              <div class="toolbar custom-toolbar">
+                <label class="search-box"><i data-lucide="search"></i><input id="custom-search" placeholder="筛选公式命中股票" autocomplete="off"></label>
+                <span class="muted">独立筛选，不改变综合评分</span>
+              </div>
+              <div class="table-wrap"><table id="custom-results-table"></table></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view page-view" id="view-strategies">
           <section class="settings-section local-only">
             <div class="settings-header">
-              <div><span class="section-label">策略组合</span><h2>启用策略</h2></div>
+              <div><span class="section-label">内置规则</span><h2>启用策略</h2></div>
               <div class="settings-actions">
-                <select id="strategy-profile" aria-label="策略组合">
-                  <option value="balanced">均衡组合</option>
-                  <option value="breakout">突破优先</option>
-                  <option value="pullback">回踩优先</option>
-                  <option value="steady">稳健趋势</option>
-                  <option value="custom">自定义</option>
-                </select>
+                <select id="strategy-profile" aria-label="策略组合"><option value="balanced">均衡组合</option><option value="breakout">突破优先</option><option value="pullback">回踩优先</option><option value="steady">稳健趋势</option><option value="custom">自定义</option></select>
                 <button class="primary-button" id="save-strategies-button"><i data-lucide="save"></i><span>保存策略</span></button>
               </div>
             </div>
             <div class="strategy-grid" id="strategy-grid"></div>
           </section>
-
           <section class="settings-section local-only pool-settings">
-            <div class="settings-header">
-              <div><span class="section-label">股票池</span><h2>范围与基础过滤</h2></div>
-              <button class="primary-button" id="save-pool-button"><i data-lucide="save"></i><span>保存股票池</span></button>
-            </div>
+            <div class="settings-header"><div><span class="section-label">股票池</span><h2>范围与基础过滤</h2></div><button class="primary-button" id="save-pool-button"><i data-lucide="save"></i><span>保存股票池</span></button></div>
             <div class="form-grid">
               <label><span>最低股价（元）</span><input id="pool-min-price" type="number" min="0.01" step="0.1"></label>
               <label><span>最少上市天数</span><input id="pool-min-days" type="number" min="1" step="1"></label>
               <label><span>20日平均成交额（元）</span><input id="pool-min-amount" type="number" min="0" step="10000000"></label>
             </div>
-            <div class="option-group">
-              <span>排除市场板块</span>
-              <div class="check-row" id="board-options"></div>
-            </div>
-            <div class="check-row binary-options">
-              <label><input id="pool-exclude-st" type="checkbox"><span>排除 ST / 退市风险</span></label>
-              <label><input id="pool-exclude-suspended" type="checkbox"><span>排除停牌股票</span></label>
-            </div>
+            <div class="option-group"><span>排除市场板块</span><div class="check-row" id="board-options"></div></div>
+            <div class="check-row binary-options"><label><input id="pool-exclude-st" type="checkbox"><span>排除 ST / 退市风险</span></label><label><input id="pool-exclude-suspended" type="checkbox"><span>排除停牌股票</span></label></div>
           </section>
-
-          <section class="panel table-panel">
-            <div class="section-heading">
-              <div><span class="section-label">历史样本</span><h2>策略表现</h2></div>
-              <span class="muted">按入选日收盘价统计</span>
-            </div>
+          <section class="data-surface performance-surface">
+            <div class="surface-heading"><div><span class="section-label">历史样本</span><h2>策略表现</h2></div><span class="muted">按入选日收盘价统计</span></div>
             <div class="table-wrap"><table id="performance-table"></table></div>
           </section>
         </section>
 
-        <section class="view" id="view-system">
+        <section class="view page-view" id="view-system">
           <div class="system-grid">
-            <section class="panel">
-              <div class="section-heading"><div><span class="section-label">本地数据库</span><h2>数据健康</h2></div><span class="health-state" id="health-state">--</span></div>
-              <dl class="health-list" id="health-list"></dl>
-            </section>
-            <section class="panel local-only">
-              <div class="section-heading"><div><span class="section-label">后台任务</span><h2>任务执行</h2></div><span class="run-state" id="run-state">空闲</span></div>
-              <div class="run-controls">
-                <label><span>运行模式</span><select id="run-mode"><option value="daily">每日增量</option><option value="init">首次初始化 / 补全</option></select></label>
-                <label><span>指定日期</span><input id="run-date" type="date"></label>
-                <button class="primary-button" id="run-button"><i data-lucide="play"></i><span>开始执行</span></button>
-              </div>
-              <pre class="run-output" id="run-output">等待任务</pre>
-            </section>
+            <section class="data-surface"><div class="surface-heading"><div><span class="section-label">本地数据库</span><h2>数据健康</h2></div><span class="health-state" id="health-state">--</span></div><dl class="health-list" id="health-list"></dl></section>
+            <section class="data-surface local-only"><div class="surface-heading"><div><span class="section-label">后台任务</span><h2>任务执行</h2></div><span class="run-state" id="run-state">空闲</span></div><div class="run-controls"><label><span>运行模式</span><select id="run-mode"><option value="daily">每日增量</option><option value="init">首次初始化 / 补全</option></select></label><label><span>指定日期</span><input id="run-date" type="date"></label><button class="primary-button" id="run-button"><i data-lucide="play"></i><span>开始执行</span></button></div><pre class="run-output" id="run-output">等待任务</pre></section>
           </div>
-          <section class="panel table-panel local-only">
-            <div class="section-heading"><div><span class="section-label">执行记录</span><h2>最近任务</h2></div></div>
-            <div class="table-wrap"><table id="runs-table"></table></div>
-          </section>
-          <section class="system-note">
-            <i data-lucide="shield-check"></i>
-            <p id="mode-note">页面只展示盘后观察结果，不包含数据库、日志或交易功能。</p>
-          </section>
+          <section class="data-surface runs-surface local-only"><div class="surface-heading"><div><span class="section-label">执行记录</span><h2>最近任务</h2></div></div><div class="table-wrap"><table id="runs-table"></table></div></section>
+          <section class="system-note"><i data-lucide="shield-check"></i><p id="mode-note">页面只展示盘后观察结果，不包含数据库、日志或交易功能。</p></section>
         </section>
       </main>
       <footer><span id="generated-at">--</span><span>仅供盘后复盘，不构成投资建议</span></footer>
@@ -186,49 +202,27 @@
   <nav class="mobile-nav" aria-label="移动端导航">
     <button class="active" data-view="overview"><i data-lucide="layout-dashboard"></i><span>概览</span></button>
     <button data-view="watchlist"><i data-lucide="list-filter"></i><span>名单</span></button>
-    <button data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>策略</span></button>
+    <button data-view="custom"><i data-lucide="braces"></i><span>公式</span></button>
+    <button data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>配置</span></button>
     <button data-view="system"><i data-lucide="activity"></i><span>状态</span></button>
   </nav>
 
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
   <aside class="stock-drawer" id="stock-drawer" role="dialog" aria-modal="true" aria-hidden="true">
-    <header class="drawer-header">
-      <div><span class="section-label">个股详情</span><h2 id="drawer-title">--</h2><p id="drawer-subtitle">--</p></div>
-      <button class="icon-button" id="drawer-close" aria-label="关闭详情" title="关闭"><i data-lucide="x"></i></button>
-    </header>
+    <header class="drawer-header"><div><span class="section-label">个股详情</span><h2 id="drawer-title">--</h2><p id="drawer-subtitle">--</p></div><button class="icon-button" id="drawer-close" aria-label="关闭详情" title="关闭"><i data-lucide="x"></i></button></header>
     <div class="drawer-body">
-      <div class="drawer-score">
-        <strong id="drawer-score">--</strong>
-        <span>综合分</span>
-        <em id="drawer-change">--</em>
-      </div>
+      <div class="drawer-score"><strong id="drawer-score">--</strong><span>综合分</span><em id="drawer-change">--</em></div>
       <div class="tag-list" id="drawer-tags"></div>
-      <section class="drawer-section">
-        <h3>得分结构</h3>
-        <div class="score-breakdown" id="drawer-breakdown"></div>
-      </section>
-      <section class="drawer-section">
-        <h3>行业与题材</h3>
-        <p id="drawer-context">暂无稳定题材信息</p>
-        <div class="tag-list concepts" id="drawer-concepts"></div>
-      </section>
-      <section class="drawer-section">
-        <h3>为什么入选</h3>
-        <p id="drawer-reason">--</p>
-      </section>
-      <section class="drawer-section">
-        <h3>次日观察</h3>
-        <p id="drawer-condition">--</p>
-      </section>
-      <section class="drawer-section risk-section">
-        <h3>风险提示</h3>
-        <p id="drawer-risk">--</p>
-      </section>
+      <section class="drawer-section"><h3>得分结构</h3><div class="score-breakdown" id="drawer-breakdown"></div></section>
+      <section class="drawer-section"><h3>行业与题材</h3><p id="drawer-context">暂无稳定题材信息</p><div class="tag-list concepts" id="drawer-concepts"></div></section>
+      <section class="drawer-section"><h3>为什么入选</h3><p id="drawer-reason">--</p></section>
+      <section class="drawer-section"><h3>次日观察</h3><p id="drawer-condition">--</p></section>
+      <section class="drawer-section risk-section"><h3>风险提示</h3><p id="drawer-risk">--</p></section>
     </div>
   </aside>
 
   <div class="toast" id="toast" role="status"></div>
   <script src="assets/lucide.min.js"></script>
-  <script src="assets/app.js"></script>
+  <script src="assets/app.js?v=20260712-4"></script>
 </body>
 </html>

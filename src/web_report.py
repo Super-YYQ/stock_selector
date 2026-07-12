@@ -51,6 +51,8 @@ def build_report_payload(
     top10: pd.DataFrame,
     strategy_performance: pd.DataFrame | None,
     health: dict[str, object],
+    custom_strategies: list[dict[str, Any]] | None = None,
+    custom_strategy_results: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -68,6 +70,8 @@ def build_report_payload(
         "top10": _records(top10, 10),
         "strategy_performance": _records(strategy_performance),
         "strategy_distribution": _strategy_distribution(top50),
+        "custom_strategies": _json_value(custom_strategies or []),
+        "custom_strategy_results": _records(custom_strategy_results),
         "disclaimer": "仅用于盘后复盘和观察名单筛选，不构成投资建议，不执行自动交易。",
     }
 
