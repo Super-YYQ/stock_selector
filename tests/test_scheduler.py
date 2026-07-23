@@ -17,6 +17,16 @@ def test_windows_scheduler_scripts_are_powershell5_ascii_safe() -> None:
         (root / "scripts" / name).read_bytes().decode("ascii")
 
 
+def test_scheduler_status_does_not_treat_permission_errors_as_missing() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "scheduler_status.ps1").read_text(encoding="utf-8")
+
+    assert "Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop" in script
+    assert "CmdletizationQuery_NotFound_TaskName" in script
+    assert "Unable to read scheduled task" in script
+    assert "Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue" not in script
+
+
 def test_scheduler_status_parses_windows_payload(tmp_path: Path, monkeypatch) -> None:
     payload = {
         "supported": True,

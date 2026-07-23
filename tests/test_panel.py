@@ -123,3 +123,28 @@ def test_task_runner_captures_background_output() -> None:
 
     assert snapshot["last_status"] == "成功"
     assert "completed" in snapshot["output"]
+
+
+def test_manual_run_uses_publish_setting(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_start(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return {"running": True}
+
+    monkeypatch.setattr(panel, "ROOT", tmp_path)
+    monkeypatch.setattr(panel, "scheduler_status", lambda root: {"publish": True})
+    monkeypatch.setattr(panel.runner, "start", fake_start)
+
+    result = panel.start_run(panel.RunRequest(mode="daily", date="2026-07-23"))
+
+    command = captured["command"]
+    assert result == {"running": True}
+    assert command[:4] == [
+        sys.executable,
+        str(tmp_path / "scripts" / "bootstrap.py"),
+        "--command",
+        "daily",
+    ]
+    assert command[-3:] == ["--date", "2026-07-23", "--publish"]

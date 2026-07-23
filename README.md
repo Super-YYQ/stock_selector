@@ -174,14 +174,18 @@ GitHub Pages 只部署 `site/` 中的静态报告，不上传 SQLite、日志或
 2. 在 **Build and deployment → Source** 中选择 **GitHub Actions** 并保存
 3. 回到 **Actions**，重新运行失败的 Pages 任务，确认部署成功
 4. 确认本机 Git 已登录并可执行 `git push`
-5. 双击 `install_scheduler_publish.bat`
+5. 在面板“运行状态”中勾选“完成后推送网页报告”，设置时间并点击“启用并保存”
 
-之后工作日任务成功时会：
+这条链路不调用 AI，也不需要保持面板或 Codex 打开。Windows 计划任务会直接执行：
 
 1. 更新数据并生成报告
 2. 只提交 `site/` 的变化
 3. 推送到 `main`
 4. 由 GitHub Actions 部署 Pages
+
+勾选自动推送后，面板中的手动盘后任务也会执行相同的发布流程。计划任务支持电池供电并启用“错过后尽快运行”；由于 Git 推送使用当前用户凭据，执行时需要 Windows 用户处于登录状态且网络可用。
+
+也可以双击 `install_scheduler_publish.bat` 使用默认时间快速安装。
 
 默认访问地址：
 

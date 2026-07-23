@@ -21,7 +21,7 @@ $Minutes = [int]$Time.Substring(3, 2)
 $AtTime = [datetime]::Today.AddHours($Hours).AddMinutes($Minutes)
 $Action = New-ScheduledTaskAction -Execute $PythonLauncher -Argument $Arguments -WorkingDirectory $Root
 $Trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At $AtTime
-$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 6) -MultipleInstances IgnoreNew
+$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 6) -MultipleInstances IgnoreNew
 $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description "A-share post-market selector on weekdays" -Force | Out-Null

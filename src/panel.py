@@ -357,11 +357,19 @@ def start_run(request: RunRequest) -> dict[str, Any]:
             datetime.strptime(request.date, "%Y-%m-%d")
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="日期格式必须为 YYYY-MM-DD") from exc
-    command = [sys.executable, str(ROOT / "run_daily.py")]
-    if request.mode == "init":
-        command.append("--init")
+    command = [
+        sys.executable,
+        str(ROOT / "scripts" / "bootstrap.py"),
+        "--command",
+        request.mode,
+    ]
     if request.date:
         command.extend(["--date", request.date])
+    try:
+        if scheduler_status(ROOT).get("publish"):
+            command.append("--publish")
+    except SchedulerError as exc:
+        LOGGER.warning("读取自动发布设置失败，本次任务仅生成本地报告: %s", exc)
     try:
         return runner.start(
             command,
