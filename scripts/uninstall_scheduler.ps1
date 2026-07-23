@@ -3,7 +3,7 @@ $TaskName = -join @([char]0x0041, [char]0x80A1, [char]0x76D8, [char]0x540E, [cha
 $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($Task) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-    Write-Host "已删除计划任务：$TaskName" -ForegroundColor Green
+    Write-Host "Scheduled task removed: $TaskName" -ForegroundColor Green
 } else {
-    Write-Host "未找到计划任务：$TaskName"
+    Write-Host "Scheduled task is not installed: $TaskName"
 }

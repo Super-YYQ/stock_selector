@@ -6,6 +6,17 @@ import pytest
 import src.scheduler as scheduler
 
 
+def test_windows_scheduler_scripts_are_powershell5_ascii_safe() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for name in (
+        "install_scheduler.ps1",
+        "uninstall_scheduler.ps1",
+        "scheduler_status.ps1",
+        "scheduler_elevated.ps1",
+    ):
+        (root / "scripts" / name).read_bytes().decode("ascii")
+
+
 def test_scheduler_status_parses_windows_payload(tmp_path: Path, monkeypatch) -> None:
     payload = {
         "supported": True,
@@ -43,3 +54,24 @@ def test_update_scheduler_rejects_invalid_time(tmp_path: Path, monkeypatch) -> N
 
     with pytest.raises(scheduler.SchedulerError, match="HH:MM"):
         scheduler.update_scheduler(tmp_path, enabled=True, time="25:90", publish=False)
+
+
+def test_update_scheduler_retries_permission_error_with_uac(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run(root: Path, name: str, arguments: list[str] | None = None) -> str:
+        calls.append((name, arguments or []))
+        if name == "install_scheduler.ps1":
+            raise scheduler.SchedulerError("Access is denied (0x80041003)")
+        return json.dumps({"supported": True, "enabled": True, "time": "17:30"})
+
+    monkeypatch.setattr(scheduler, "_is_windows", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_script", fake_run)
+
+    result = scheduler.update_scheduler(tmp_path, enabled=True, time="17:30", publish=False)
+
+    assert result["enabled"] is True
+    assert calls[1] == (
+        "scheduler_elevated.ps1",
+        ["-Operation", "install", "-Time", "17:30"],
+    )

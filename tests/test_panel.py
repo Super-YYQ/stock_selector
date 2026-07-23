@@ -106,8 +106,15 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
 def test_task_runner_captures_background_output() -> None:
     task = panel.TaskRunner()
 
-    started = task.start([sys.executable, "-c", "print('completed')"])
+    started = task.start(
+        [sys.executable, "-c", "print('completed')"],
+        mode="daily",
+        report_date="2026-07-23",
+    )
     assert started["running"] is True
+    assert started["mode"] == "daily"
+    assert started["report_date"] == "2026-07-23"
+    assert "任务已提交" in started["output"]
     for _ in range(120):
         snapshot = task.snapshot()
         if not snapshot["running"]:

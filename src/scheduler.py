@@ -56,6 +56,42 @@ def _run_script(root: Path, script_name: str, arguments: list[str] | None = None
     return result.stdout.strip()
 
 
+def _is_permission_error(error: SchedulerError) -> bool:
+    message = str(error).lower()
+    return (
+        "access is denied" in message
+        or "permissiondenied" in message
+        or "0x80041003" in message
+        or "拒绝访问" in str(error)
+    )
+
+
+def _run_scheduler_change(
+    root: Path,
+    *,
+    enabled: bool,
+    time: str,
+    publish: bool,
+) -> None:
+    if enabled:
+        script_name = "install_scheduler.ps1"
+        arguments = ["-Time", time]
+        elevated_arguments = ["-Operation", "install", "-Time", time]
+        if publish:
+            arguments.append("-Publish")
+            elevated_arguments.append("-Publish")
+    else:
+        script_name = "uninstall_scheduler.ps1"
+        arguments = []
+        elevated_arguments = ["-Operation", "uninstall"]
+    try:
+        _run_script(root, script_name, arguments)
+    except SchedulerError as exc:
+        if not _is_permission_error(exc):
+            raise
+        _run_script(root, "scheduler_elevated.ps1", elevated_arguments)
+
+
 def scheduler_status(root: Path) -> dict[str, Any]:
     if not _is_windows():
         return {
@@ -79,11 +115,5 @@ def update_scheduler(root: Path, *, enabled: bool, time: str, publish: bool) -> 
         raise SchedulerError("当前面板仅支持管理 Windows 计划任务")
     if not TIME_PATTERN.fullmatch(time):
         raise SchedulerError("执行时间必须为 HH:MM 格式")
-    if enabled:
-        arguments = ["-Time", time]
-        if publish:
-            arguments.append("-Publish")
-        _run_script(root, "install_scheduler.ps1", arguments)
-    else:
-        _run_script(root, "uninstall_scheduler.ps1")
+    _run_scheduler_change(root, enabled=enabled, time=time, publish=publish)
     return scheduler_status(root)

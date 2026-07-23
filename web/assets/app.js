@@ -9,6 +9,7 @@
     customStrategies: null,
     pool: null,
     mode: "local",
+    ready: false,
     listName: "top50",
     search: "",
     board: "",
@@ -91,15 +92,19 @@
 
   async function load() {
     setConnection("loading", "正在读取数据");
+    state.ready = false;
+    renderRunner((state.status && state.status.runner) || {});
     try {
       state.payload = await request("/api/latest");
       state.mode = "local";
       document.body.classList.remove("static-mode");
       await loadLocalState();
+      state.ready = true;
     } catch (apiError) {
       try {
         state.payload = await request("data/latest.json");
         state.mode = "static";
+        state.ready = false;
         state.status = null;
         state.strategies = null;
         state.customStrategies = null;
@@ -721,6 +726,19 @@
     return String(value).replace("T", " ").slice(0, 16);
   }
 
+  function schedulerResultLabel(value) {
+    if (value == null) return "--";
+    var code = Number(value);
+    var labels = {
+      0: "成功",
+      267008: "等待运行",
+      267009: "运行中",
+      267010: "已停用",
+      267011: "尚未运行"
+    };
+    return labels[code] || ("代码 " + value);
+  }
+
   function renderScheduler() {
     var scheduler = state.scheduler || {};
     var supported = scheduler.supported !== false;
@@ -744,8 +762,7 @@
         : "设置时间后启用，电脑关机期间不会运行，恢复可用后会补跑一次。");
     byId("scheduler-next-run").textContent = displayDateTime(scheduler.next_run_time);
     byId("scheduler-last-run").textContent = displayDateTime(scheduler.last_run_time);
-    var result = scheduler.last_result;
-    byId("scheduler-last-result").textContent = result == null ? "--" : (Number(result) === 0 ? "成功" : "代码 " + result);
+    byId("scheduler-last-result").textContent = schedulerResultLabel(scheduler.last_result);
   }
 
   async function saveScheduler(enabled) {
@@ -773,22 +790,36 @@
 
   function renderRunner(runner) {
     var running = Boolean(runner.running);
-    byId("run-state").textContent = running ? "运行中" : (runner.last_status || "空闲");
+    byId("run-state").textContent = !state.ready ? "准备中" : (running ? "运行中" : (runner.last_status || "空闲"));
     byId("run-state").className = "run-state" + (running ? " active" : "");
-    byId("run-output").textContent = runner.output || (running ? "任务正在执行" : "等待任务");
-    byId("run-button").disabled = running;
-    byId("quick-run-button").disabled = running;
+    byId("run-output").textContent = runner.output || (!state.ready ? "正在连接本地服务..." : (running ? "任务正在执行" : "等待任务"));
+    byId("run-button").disabled = running || !state.ready;
+    byId("quick-run-button").disabled = running || !state.ready;
   }
 
   function renderRuns(rows) {
+    var displayRows = (rows || []).slice();
+    var active = state.status && state.status.runner;
+    var hasRunningRow = displayRows.some(function (row) { return row.status === "running"; });
+    if (active && active.running && !hasRunningRow) {
+      displayRows.unshift({
+        started_at: active.started_at,
+        mode: active.mode,
+        report_date: active.report_date,
+        status: "running",
+        message: "任务已启动，正在更新数据"
+      });
+    }
     var columns = [
       { key: "started_at", label: "开始时间", format: function (v) { return escapeHtml(String(v || "").replace("T", " ")); } },
-      { key: "mode", label: "模式" },
+      { key: "mode", label: "模式", format: function (v) { return v === "init" ? "初始化" : "每日增量"; } },
       { key: "report_date", label: "报告日期" },
-      { key: "status", label: "状态" },
+      { key: "status", label: "状态", format: function (v) {
+        return ({ running: "运行中", success: "成功", failed: "失败" })[v] || escapeHtml(v);
+      } },
       { key: "message", label: "说明", className: function () { return "signal-cell"; } }
     ];
-    byId("runs-table").innerHTML = tableHtml(columns, rows);
+    byId("runs-table").innerHTML = tableHtml(columns, displayRows);
   }
   function switchView(name) {
     all(".view").forEach(function (view) {
@@ -803,31 +834,44 @@
   }
 
   async function startRun(mode) {
+    if (!state.ready) {
+      toast("本地服务仍在准备，请稍候");
+      return;
+    }
     var body = { mode: mode || byId("run-mode").value };
     var runDate = byId("run-date").value;
     if (runDate) body.date = runDate;
+    byId("run-button").disabled = true;
+    byId("quick-run-button").disabled = true;
     try {
-      await request("/api/run", {
+      var started = await request("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
-      toast("任务已启动");
-      await refreshStatus();
+      state.status = state.status || { runs: [], reports: [] };
+      state.status.runner = started;
+      renderRunner(started);
+      renderRuns(state.status.runs || []);
       switchView("system");
+      toast("任务已启动");
     } catch (error) {
       toast("启动失败：" + error.message);
+      renderRunner((state.status && state.status.runner) || {});
     }
   }
 
-  async function refreshStatus() {
+  async function refreshRunner() {
     if (state.mode !== "local") return;
     var wasRunning = Boolean(state.status && state.status.runner && state.status.runner.running);
     try {
-      state.status = await request("/api/status");
-      renderSystem();
+      var current = await request("/api/run");
+      state.status = state.status || { runs: [], reports: [] };
+      state.status.runner = current;
+      renderRunner(current);
+      renderRuns(state.status.runs || []);
       icons();
-      if (wasRunning && !(state.status.runner && state.status.runner.running)) {
+      if (wasRunning && !current.running) {
         await load();
       }
     } catch (error) {
@@ -905,7 +949,7 @@
   load();
   window.setInterval(function () {
     if (state.mode === "local" && state.status && state.status.runner && state.status.runner.running) {
-      refreshStatus();
+      refreshRunner();
     }
   }, 3500);
 }());

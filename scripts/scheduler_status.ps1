@@ -35,6 +35,6 @@ if ($Trigger -and $Trigger.StartBoundary) {
     time = $TaskTime
     publish = [bool]($Action.Arguments -match "--publish")
     next_run_time = if ($Info.NextRunTime -and $Info.NextRunTime.Year -gt 1900) { $Info.NextRunTime.ToString("s") } else { $null }
-    last_run_time = if ($Info.LastRunTime -and $Info.LastRunTime.Year -gt 1900) { $Info.LastRunTime.ToString("s") } else { $null }
+    last_run_time = if ($Info.LastRunTime -and $Info.LastRunTime.Year -gt 2000) { $Info.LastRunTime.ToString("s") } else { $null }
     last_result = $Info.LastTaskResult
 } | ConvertTo-Json -Compress

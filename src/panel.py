@@ -83,8 +83,16 @@ class TaskRunner:
         self._finished_at: str | None = None
         self._last_status = "空闲"
         self._command: list[str] = []
+        self._mode = "daily"
+        self._report_date: str | None = None
 
-    def start(self, command: list[str]) -> dict[str, Any]:
+    def start(
+        self,
+        command: list[str],
+        *,
+        mode: str = "daily",
+        report_date: str | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 raise RuntimeError("已有任务正在执行")
@@ -93,6 +101,9 @@ class TaskRunner:
             self._finished_at = None
             self._last_status = "运行中"
             self._command = command
+            self._mode = mode
+            self._report_date = report_date
+            self._output.append("任务已提交，正在启动数据更新进程...")
             env = os.environ.copy()
             env["PYTHONUTF8"] = "1"
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -134,6 +145,8 @@ class TaskRunner:
                 "last_status": "运行中" if running else self._last_status,
                 "return_code": return_code,
                 "command": self._command,
+                "mode": self._mode,
+                "report_date": self._report_date,
                 "output": "\n".join(self._output),
             }
 
@@ -350,7 +363,11 @@ def start_run(request: RunRequest) -> dict[str, Any]:
     if request.date:
         command.extend(["--date", request.date])
     try:
-        return runner.start(command)
+        return runner.start(
+            command,
+            mode=request.mode,
+            report_date=request.date or date.today().strftime("%Y-%m-%d"),
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

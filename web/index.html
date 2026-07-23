@@ -39,7 +39,7 @@
         </div>
         <div class="topbar-actions">
           <button class="ghost-button local-only" id="download-report-button"><i data-lucide="download"></i><span>下载日报</span></button>
-          <button class="primary-button local-only" id="quick-run-button"><i data-lucide="play"></i><span>执行盘后任务</span></button>
+          <button class="primary-button local-only" id="quick-run-button" disabled><i data-lucide="play"></i><span>执行盘后任务</span></button>
         </div>
       </header>
 
@@ -189,7 +189,7 @@
         <section class="view page-view" id="view-system">
           <div class="system-grid">
             <section class="data-surface"><div class="surface-heading"><div><span class="section-label">本地数据库</span><h2>数据健康</h2></div><span class="health-state" id="health-state">--</span></div><dl class="health-list" id="health-list"></dl></section>
-            <section class="data-surface local-only"><div class="surface-heading"><div><span class="section-label">后台任务</span><h2>任务执行</h2></div><span class="run-state" id="run-state">空闲</span></div><div class="run-controls"><label><span>运行模式</span><select id="run-mode"><option value="daily">每日增量</option><option value="init">首次初始化 / 补全</option></select></label><label><span>指定日期</span><input id="run-date" type="date"></label><button class="primary-button" id="run-button"><i data-lucide="play"></i><span>开始执行</span></button></div><pre class="run-output" id="run-output">等待任务</pre></section>
+            <section class="data-surface local-only"><div class="surface-heading"><div><span class="section-label">后台任务</span><h2>任务执行</h2></div><span class="run-state" id="run-state">准备中</span></div><div class="run-controls"><label><span>运行模式</span><select id="run-mode"><option value="daily">每日增量（自动补齐缺失日期）</option><option value="init">首次初始化 / 补全</option></select></label><label><span>指定日期</span><input id="run-date" type="date"></label><button class="primary-button" id="run-button" disabled><i data-lucide="play"></i><span>开始执行</span></button></div><pre class="run-output" id="run-output">正在连接本地服务...</pre></section>
           </div>
           <section class="data-surface scheduler-surface local-only">
             <div class="surface-heading"><div><span class="section-label">Windows 计划任务</span><h2>定时执行</h2></div><span class="scheduler-state" id="scheduler-state">读取中</span></div>
@@ -238,6 +238,6 @@
 
   <div class="toast" id="toast" role="status"></div>
   <script src="assets/lucide.min.js"></script>
-  <script src="assets/app.js?v=20260712-5"></script>
+  <script src="assets/app.js?v=20260723-1"></script>
 </body>
 </html>
