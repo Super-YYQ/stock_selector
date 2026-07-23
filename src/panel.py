@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import os
@@ -186,6 +187,11 @@ def latest_report() -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"报告数据读取失败: {exc}") from exc
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"app": "stock-selector", "status": "ok"}
 
 
 @app.get("/api/status")
@@ -429,15 +435,47 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _local_http_get(port: int, path: str) -> tuple[int, str]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1.5)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        return response.status, response.read().decode("utf-8", errors="replace")
+    finally:
+        connection.close()
+
+
+def _panel_is_running(port: int) -> bool:
+    try:
+        status, body = _local_http_get(port, "/api/health")
+        if status == 200:
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                return "盘后选股助手" in body
+            return payload.get("app") == "stock-selector"
+        if status == 404:
+            root_status, root_body = _local_http_get(port, "/")
+            return root_status == 200 and "盘后选股助手" in root_body
+    except (OSError, http.client.HTTPException, json.JSONDecodeError):
+        return False
+    return False
+
+
 def run_panel(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     should_open = _config().panel.open_browser and not args.no_browser
     url = f"http://127.0.0.1:{args.port}"
+    if _panel_is_running(args.port):
+        print(f"面板已经运行：{url}")
+        if should_open:
+            webbrowser.open(url)
+        return
     if should_open:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         LOGGER.warning("面板正在监听非本机地址，请在反向代理层配置身份验证和 HTTPS")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info", use_colors=False)
 
 
 if __name__ == "__main__":

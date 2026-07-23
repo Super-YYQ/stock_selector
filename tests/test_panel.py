@@ -103,6 +103,28 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
     assert "科创板" in persisted
 
 
+def test_panel_health_and_existing_instance_detection(monkeypatch) -> None:
+    monkeypatch.setattr(
+        panel,
+        "_local_http_get",
+        lambda port, path: (200, '{"app":"stock-selector","status":"ok"}'),
+    )
+
+    assert panel.health() == {"app": "stock-selector", "status": "ok"}
+    assert panel._panel_is_running(8765) is True
+
+
+def test_existing_legacy_panel_is_detected(monkeypatch) -> None:
+    def fake_get(port, path):
+        if path == "/api/health":
+            return 404, '{"detail":"Not Found"}'
+        return 200, "<title>盘后选股助手</title>"
+
+    monkeypatch.setattr(panel, "_local_http_get", fake_get)
+
+    assert panel._panel_is_running(8765) is True
+
+
 def test_task_runner_captures_background_output() -> None:
     task = panel.TaskRunner()
 
