@@ -266,6 +266,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .system-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, .9fr); gap: 16px; }
 .health-state, .run-state, .scheduler-state { padding: 4px 8px; border-radius: 3px; background: var(--teal-soft); color: var(--teal); font-size: 11px; font-weight: 800; }
 .scheduler-state:not(.active) { background: var(--surface-soft); color: var(--muted); }
+.scheduler-state.pending { background: var(--amber-soft); color: var(--amber); }
 .health-state.bad { background: var(--coral-soft); color: var(--danger); }
 .health-list { margin: 0; display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
 .health-list div { padding: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }

@@ -10,6 +10,7 @@
     pool: null,
     mode: "local",
     ready: false,
+    schedulerDirty: false,
     listName: "top50",
     search: "",
     board: "",
@@ -741,28 +742,43 @@
 
   function renderScheduler() {
     var scheduler = state.scheduler || {};
-    var supported = scheduler.supported !== false;
+    var loaded = Boolean(state.scheduler);
+    var supported = loaded && scheduler.supported !== false;
     var enabled = Boolean(scheduler.enabled);
+    var dirty = supported && state.schedulerDirty;
+    var draftTime = dirty ? (byId("scheduler-time").value || scheduler.time || "17:30") : (scheduler.time || "17:30");
     var statusNode = byId("scheduler-state");
-    statusNode.textContent = !supported ? "不支持" : (enabled ? "已启用" : "未启用");
-    statusNode.className = "scheduler-state" + (enabled ? " active" : "");
-    byId("scheduler-time").value = scheduler.time || "17:30";
-    byId("scheduler-publish").checked = Boolean(scheduler.publish);
+    statusNode.textContent = !loaded ? "读取中" : (!supported ? "不支持" : (dirty ? "待保存" : (enabled ? "已启用" : "未启用")));
+    statusNode.className = "scheduler-state" + (dirty ? " pending" : (enabled ? " active" : ""));
+    if (!dirty) {
+      byId("scheduler-time").value = scheduler.time || "17:30";
+      byId("scheduler-publish").checked = Boolean(scheduler.publish);
+    }
     byId("scheduler-time").disabled = !supported;
     byId("scheduler-publish").disabled = !supported;
     byId("save-scheduler-button").disabled = !supported;
     byId("disable-scheduler-button").disabled = !supported || !enabled;
-    byId("scheduler-summary-title").textContent = enabled
-      ? "工作日 " + (scheduler.time || "17:30") + " 自动复盘"
+    byId("scheduler-summary-title").textContent = dirty
+      ? "保存后工作日 " + draftTime + " 自动复盘"
+      : enabled
+        ? "工作日 " + draftTime + " 自动复盘"
       : "工作日盘后自动复盘";
     byId("scheduler-summary-text").textContent = !supported
       ? (scheduler.message || "当前系统不支持本地计划任务管理")
-      : (enabled
+      : (dirty
+        ? "修改尚未保存；当前计划仍为工作日 " + (scheduler.time || "17:30") + "。"
+        : enabled
         ? "计划任务已生效" + (scheduler.publish ? "，完成后会推送网页报告。" : "，报告只保存在本机。")
         : "设置时间后启用，电脑关机期间不会运行，恢复可用后会补跑一次。");
     byId("scheduler-next-run").textContent = displayDateTime(scheduler.next_run_time);
     byId("scheduler-last-run").textContent = displayDateTime(scheduler.last_run_time);
     byId("scheduler-last-result").textContent = schedulerResultLabel(scheduler.last_result);
+  }
+
+  function markSchedulerDirty() {
+    if (!state.scheduler || state.scheduler.supported === false) return;
+    state.schedulerDirty = true;
+    renderScheduler();
   }
 
   async function saveScheduler(enabled) {
@@ -779,6 +795,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
+      state.schedulerDirty = false;
       renderScheduler();
       icons();
       toast(enabled ? "定时执行已启用" : "定时执行已停用");
@@ -913,7 +930,10 @@
       state.customSearch = event.target.value;
       renderCustomStrategies();
     });
-    byId("refresh-button").addEventListener("click", load);
+    byId("refresh-button").addEventListener("click", function () {
+      state.schedulerDirty = false;
+      load();
+    });
     byId("save-strategies-button").addEventListener("click", saveStrategies);
     byId("save-custom-strategies-button").addEventListener("click", saveCustomStrategies);
     byId("save-pool-button").addEventListener("click", savePool);
@@ -921,6 +941,8 @@
     byId("quick-run-button").addEventListener("click", function () { startRun("daily"); });
     byId("save-scheduler-button").addEventListener("click", function () { saveScheduler(true); });
     byId("disable-scheduler-button").addEventListener("click", function () { saveScheduler(false); });
+    byId("scheduler-time").addEventListener("input", markSchedulerDirty);
+    byId("scheduler-publish").addEventListener("change", markSchedulerDirty);
     byId("download-report-button").addEventListener("click", function (event) {
       var href = event.currentTarget.dataset.href;
       if (href) window.location.href = href;
