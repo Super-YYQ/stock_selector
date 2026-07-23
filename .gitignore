@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 data/*.db
+data/panel.pid
 data/raw/
 data/processed/
 logs/

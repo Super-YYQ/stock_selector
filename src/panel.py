@@ -37,6 +37,7 @@ from src.strategies.registry import STRATEGY_PROFILES, STRATEGY_REGISTRY, strate
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "web"
+PANEL_PID_FILE = ROOT / "data" / "panel.pid"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -190,8 +191,8 @@ def latest_report() -> Any:
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"app": "stock-selector", "status": "ok"}
+def health() -> dict[str, str | int]:
+    return {"app": "stock-selector", "status": "ok", "pid": os.getpid()}
 
 
 @app.get("/api/status")
@@ -475,7 +476,16 @@ def run_panel(argv: list[str] | None = None) -> None:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         LOGGER.warning("面板正在监听非本机地址，请在反向代理层配置身份验证和 HTTPS")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info", use_colors=False)
+    PANEL_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PANEL_PID_FILE.write_text(str(os.getpid()), encoding="ascii")
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info", use_colors=False)
+    finally:
+        try:
+            if PANEL_PID_FILE.read_text(encoding="ascii").strip() == str(os.getpid()):
+                PANEL_PID_FILE.unlink()
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

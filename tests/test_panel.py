@@ -110,7 +110,10 @@ def test_panel_health_and_existing_instance_detection(monkeypatch) -> None:
         lambda port, path: (200, '{"app":"stock-selector","status":"ok"}'),
     )
 
-    assert panel.health() == {"app": "stock-selector", "status": "ok"}
+    health = panel.health()
+    assert health["app"] == "stock-selector"
+    assert health["status"] == "ok"
+    assert health["pid"] > 0
     assert panel._panel_is_running(8765) is True
 
 
