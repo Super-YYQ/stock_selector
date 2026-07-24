@@ -27,7 +27,10 @@ from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
 from src.scoring import build_ranked_results
 from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
-from src.strategies.registry import run_enabled_strategies
+from src.strategies.registry import (
+    build_strategy_screener_data,
+    evaluate_enabled_strategies,
+)
 from src.stock_character import calculate_stock_character_scores
 from src.stock_context import enrich_ranked_context
 from src.volume_price_score import calculate_volume_price_scores
@@ -523,13 +526,14 @@ def run(argv: list[str] | None = None) -> Path | None:
         factors = factors.merge(sector_scores, on=["code", "industry"], how="left")
         factors = factors.merge(character, on="code", how="left")
         factors = factors.merge(volume_price, on="code", how="left")
-        strategy_scores = run_enabled_strategies(
+        strategy_evaluation = evaluate_enabled_strategies(
             stock_daily,
             report_date,
             factors,
             config.strategies.enabled,
+            config.strategies.parameters,
         )
-        factors = factors.merge(strategy_scores, on="code", how="left")
+        factors = factors.merge(strategy_evaluation.aggregate, on="code", how="left")
         factors = _add_risk_inputs(factors)
         risk = calculate_risk_penalties(factors, config.risk, config.scoring)
         factors = factors.merge(risk, on="code", how="left")
@@ -544,6 +548,12 @@ def run(argv: list[str] | None = None) -> Path | None:
             ranked = enrich_ranked_context(db, ranked, report_date, config.features)
         except Exception as exc:
             logger.warning("个股行业与题材说明更新失败，继续使用基础评分结果: %s", exc)
+        strategy_screeners, strategy_screener_results = build_strategy_screener_data(
+            strategy_evaluation.hits,
+            ranked,
+            config.strategies.enabled,
+            config.strategies.top_per_strategy,
+        )
         custom_strategies: list[dict[str, Any]] = []
         custom_strategy_results = pd.DataFrame()
         try:
@@ -590,6 +600,8 @@ def run(argv: list[str] | None = None) -> Path | None:
             top10,
             performance,
             health,
+            strategy_screeners=strategy_screeners,
+            strategy_screener_results=strategy_screener_results,
             custom_strategies=custom_strategies,
             custom_strategy_results=custom_strategy_results,
         )

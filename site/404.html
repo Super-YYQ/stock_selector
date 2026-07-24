@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#151d1b">
   <title>A股盘后选股助手</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260712-4">
+  <link rel="stylesheet" href="assets/app.css?v=20260724-1">
 </head>
 <body>
   <div class="app-shell">
@@ -17,7 +17,7 @@
       <nav class="nav-list" aria-label="主导航">
         <button class="nav-item active" data-view="overview"><i data-lucide="layout-dashboard"></i><span>市场概览</span></button>
         <button class="nav-item" data-view="watchlist"><i data-lucide="list-filter"></i><span>观察名单</span></button>
-        <button class="nav-item" data-view="custom"><i data-lucide="braces"></i><span>自定义策略</span></button>
+        <button class="nav-item" data-view="custom"><i data-lucide="scan-search"></i><span>单策略筛选</span></button>
         <button class="nav-item" data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>策略配置</span></button>
         <button class="nav-item" data-view="system"><i data-lucide="activity"></i><span>运行状态</span></button>
       </nav>
@@ -140,19 +140,19 @@
         <section class="view page-view" id="view-custom">
           <div class="custom-layout">
             <aside class="formula-index">
-              <div class="surface-heading"><div><span class="section-label">自定义公式</span><h2>公式目录</h2></div><span class="muted" id="custom-formula-count">--</span></div>
+              <div class="surface-heading"><div><span class="section-label">独立选股</span><h2>策略目录</h2></div><span class="muted" id="custom-formula-count">--</span></div>
               <div class="formula-list" id="custom-formula-list"></div>
               <button class="secondary-button local-only" id="save-custom-strategies-button"><i data-lucide="save"></i><span>保存启用状态</span></button>
             </aside>
             <section class="custom-results">
               <div class="custom-result-header">
-                <div><span class="section-label">当日命中</span><h2 id="custom-result-title">自定义策略结果</h2><p id="custom-result-description">--</p></div>
+                <div><span class="section-label">当日命中</span><h2 id="custom-result-title">单策略筛选结果</h2><p id="custom-result-description">--</p></div>
                 <div class="custom-result-count"><strong id="custom-match-count">0</strong><span>只股票</span></div>
               </div>
               <div class="formula-summary" id="custom-formula-summary">--</div>
               <div class="toolbar custom-toolbar">
-                <label class="search-box"><i data-lucide="search"></i><input id="custom-search" placeholder="筛选公式命中股票" autocomplete="off"></label>
-                <span class="muted">独立筛选，不改变综合评分</span>
+                <label class="search-box"><i data-lucide="search"></i><input id="custom-search" placeholder="筛选当前策略命中股票" autocomplete="off"></label>
+                <span class="muted">每个策略独立筛选，不改变综合评分</span>
               </div>
               <div class="table-wrap"><table id="custom-results-table"></table></div>
             </section>
@@ -217,7 +217,7 @@
   <nav class="mobile-nav" aria-label="移动端导航">
     <button class="active" data-view="overview"><i data-lucide="layout-dashboard"></i><span>概览</span></button>
     <button data-view="watchlist"><i data-lucide="list-filter"></i><span>名单</span></button>
-    <button data-view="custom"><i data-lucide="braces"></i><span>公式</span></button>
+    <button data-view="custom"><i data-lucide="scan-search"></i><span>单筛</span></button>
     <button data-view="strategies"><i data-lucide="sliders-horizontal"></i><span>配置</span></button>
     <button data-view="system"><i data-lucide="activity"></i><span>状态</span></button>
   </nav>
@@ -238,6 +238,6 @@
 
   <div class="toast" id="toast" role="status"></div>
   <script src="assets/lucide.min.js"></script>
-  <script src="assets/app.js?v=20260723-3"></script>
+  <script src="assets/app.js?v=20260724-1"></script>
 </body>
 </html>

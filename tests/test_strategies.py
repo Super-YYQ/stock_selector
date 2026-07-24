@@ -1,6 +1,12 @@
 import pandas as pd
 
-from src.strategies.registry import run_enabled_strategies, strategy_catalog
+from src.strategies.registry import (
+    build_strategy_screener_data,
+    evaluate_enabled_strategies,
+    run_enabled_strategies,
+    strategy_catalog,
+)
+from src.strategies.volume_breakout_pullback import score_volume_breakout_pullback
 
 
 def _strategy_daily() -> pd.DataFrame:
@@ -78,12 +84,95 @@ def test_run_enabled_strategies_returns_zero_when_disabled() -> None:
 def test_strategy_catalog_contains_all_strategy_families() -> None:
     catalog = strategy_catalog()
 
-    assert len(catalog) == 10
+    assert len(catalog) == 11
     assert {item["key"] for item in catalog} >= {
         "volatility_squeeze",
         "trend_pullback_reversal",
         "low_volatility_rps",
         "first_pullback",
+        "volume_breakout_pullback",
         "sector_leader",
     }
     assert {item["family"] for item in catalog} >= {"breakout", "trend", "pullback", "event", "sector"}
+
+
+def test_strategy_screener_data_keeps_each_strategy_result_separate() -> None:
+    daily = _strategy_daily()
+    factors = pd.DataFrame(
+        [
+            {"code": "000001", "name": "强势股", "rps20": 92, "rps60": 88},
+            {"code": "000002", "name": "弱势股", "rps20": 20, "rps60": 30},
+        ]
+    )
+    evaluation = evaluate_enabled_strategies(
+        daily,
+        "2026-05-61",
+        factors,
+        ["ma_volume", "turtle_breakout", "rps_breakout"],
+    )
+    ranked = factors.assign(total_score=[88.0, 20.0], amount_ratio=[3.2, 1.0])
+
+    catalog, results = build_strategy_screener_data(
+        evaluation.hits,
+        ranked,
+        ["ma_volume", "turtle_breakout", "rps_breakout"],
+        max_results=20,
+    )
+
+    by_key = {item["key"]: item for item in catalog}
+    assert by_key["ma_volume"]["matched_count"] == 1
+    assert by_key["ma_volume"]["enabled"] is True
+    assert by_key["pullback_stable"]["enabled"] is False
+    assert set(results["single_strategy_key"]) == {
+        "ma_volume",
+        "turtle_breakout",
+        "rps_breakout",
+    }
+    assert results.groupby("single_strategy_key")["single_strategy_rank"].min().eq(1).all()
+    assert results["single_strategy_reason"].ne("").all()
+
+
+def test_document_pattern_scores_breakout_pullback_ready() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "last_ignition_amount": 200,
+                "prior_amount_mean_3": 100,
+                "prior_amount_min_5": 80,
+                "last_ignition_low": 10,
+                "last_ignition_platform": 10.1,
+                "bars_since_ignition": 4,
+                "close": 10.6,
+                "prior_close_min_5": 10.2,
+                "ma20": 10.2,
+                "ma20_slope_5d": 1,
+                "distance_ma20": 3.9,
+                "high_60": 11,
+                "higher_high_count_3": 1,
+                "higher_low_count_3": 2,
+                "prev_high": 10.8,
+                "open": 10.4,
+                "close_position": 0.7,
+                "amount_ratio_5": 0.7,
+                "last_ignition_high": 11,
+                "prev_close": 10.5,
+                "prev_upper_shadow_ratio": 0.1,
+                "prev_amount_ratio_5": 1,
+                "high": 10.8,
+                "low": 10.3,
+                "prev_low": 10.2,
+                "ma5": 10.5,
+                "lower_shadow_ratio": 0.1,
+                "amount": 90,
+                "prev_amount": 100,
+                "limit_up_20d": 1,
+            }
+        ]
+    )
+
+    scored = score_volume_breakout_pullback(frame)
+
+    assert bool(scored.loc[0, "document_pattern_hit"])
+    assert bool(scored.loc[0, "document_entry_ready"])
+    assert scored.loc[0, "document_pattern_variant"] == "放量后缩量承接"
+    assert "回调明显缩量" in scored.loc[0, "document_pattern_reason"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -14,6 +15,7 @@ from src.strategies.rps_breakout import RpsBreakoutStrategy
 from src.strategies.sector_leader import SectorLeaderStrategy
 from src.strategies.trend_pullback_reversal import TrendPullbackReversalStrategy
 from src.strategies.turtle_breakout import TurtleBreakoutStrategy
+from src.strategies.volume_breakout_pullback import VolumeBreakoutPullbackStrategy
 from src.strategies.volatility_squeeze import VolatilitySqueezeStrategy
 
 
@@ -27,9 +29,54 @@ STRATEGY_CLASSES = [
     TrendPullbackReversalStrategy,
     LowVolatilityRpsStrategy,
     FirstPullbackStrategy,
+    VolumeBreakoutPullbackStrategy,
     SectorLeaderStrategy,
 ]
 STRATEGY_REGISTRY = {strategy.key: strategy for strategy in STRATEGY_CLASSES}
+STRATEGY_HIT_COLUMNS = [
+    "code",
+    "strategy_key",
+    "strategy",
+    "strategy_family",
+    "strategy_score_raw",
+    "strategy_reason",
+]
+STRATEGY_SCREENER_RESULT_COLUMNS = [
+    "single_strategy_rank",
+    "single_strategy_key",
+    "single_strategy_name",
+    "single_strategy_family",
+    "single_strategy_score",
+    "single_strategy_reason",
+    "code",
+    "name",
+    "industry",
+    "sector",
+    "market_board",
+    "concepts",
+    "total_score",
+    "close",
+    "pct_chg",
+    "amount_ratio",
+    "rps20",
+    "distance_ma20",
+    "sector_score",
+    "stock_character_score",
+    "volume_price_score",
+    "relative_strength_score",
+    "strategy_score",
+    "market_adjust_score",
+    "risk_penalty",
+    "stock_context_summary",
+    "industry_activity",
+    "limit_up_reason",
+    "reason_tags",
+    "matched_strategies",
+    "selection_reason",
+    "selection_reason_short",
+    "next_day_condition",
+    "risk_warning",
+]
 
 STRATEGY_PROFILES = {
     "balanced": list(STRATEGY_REGISTRY),
@@ -45,6 +92,7 @@ STRATEGY_PROFILES = {
         "limit_up_shakeout",
         "trend_pullback_reversal",
         "first_pullback",
+        "volume_breakout_pullback",
     ],
     "steady": [
         "rps_breakout",
@@ -80,6 +128,12 @@ def _empty_strategy_result(codes: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+@dataclass(frozen=True)
+class StrategyEvaluation:
+    aggregate: pd.DataFrame
+    hits: pd.DataFrame
+
+
 def _aggregate_code_hits(group: pd.DataFrame) -> pd.Series:
     family_scores = group.groupby("strategy_family")["strategy_score_raw"].max()
     details = [
@@ -105,29 +159,38 @@ def _aggregate_code_hits(group: pd.DataFrame) -> pd.Series:
     )
 
 
-def run_enabled_strategies(
+def evaluate_enabled_strategies(
     daily: pd.DataFrame,
     report_date: str,
     factors: pd.DataFrame,
     enabled: list[str],
-) -> pd.DataFrame:
+    parameters: dict[str, dict[str, object]] | None = None,
+) -> StrategyEvaluation:
     source_codes = factors["code"] if "code" in factors.columns else daily["code"]
     codes = pd.DataFrame({"code": sorted(set(source_codes.astype(str)))})
     if codes.empty or not enabled:
-        return _empty_strategy_result(codes)
+        return StrategyEvaluation(
+            aggregate=_empty_strategy_result(codes),
+            hits=pd.DataFrame(columns=STRATEGY_HIT_COLUMNS),
+        )
 
     features = build_strategy_features(daily, report_date, factors)
-    hits = []
+    hits: list[pd.DataFrame] = []
     for key in dict.fromkeys(enabled):
         strategy_cls = STRATEGY_REGISTRY.get(key)
         if strategy_cls is None:
             continue
-        hit = strategy_cls().evaluate(daily, report_date, factors, features)
+        hit = strategy_cls((parameters or {}).get(key, {})).evaluate(
+            daily, report_date, factors, features
+        )
         if not hit.empty:
             hits.append(hit)
 
     if not hits:
-        return _empty_strategy_result(codes)
+        return StrategyEvaluation(
+            aggregate=_empty_strategy_result(codes),
+            hits=pd.DataFrame(columns=STRATEGY_HIT_COLUMNS),
+        )
 
     all_hits = pd.concat(hits, ignore_index=True)
     rows = []
@@ -158,4 +221,81 @@ def run_enabled_strategies(
         + "；"
         + result.loc[matched, "strategy_reason"]
     )
-    return result
+    return StrategyEvaluation(aggregate=result, hits=all_hits)
+
+
+def run_enabled_strategies(
+    daily: pd.DataFrame,
+    report_date: str,
+    factors: pd.DataFrame,
+    enabled: list[str],
+    parameters: dict[str, dict[str, object]] | None = None,
+) -> pd.DataFrame:
+    return evaluate_enabled_strategies(
+        daily,
+        report_date,
+        factors,
+        enabled,
+        parameters,
+    ).aggregate
+
+
+def build_strategy_screener_data(
+    hits: pd.DataFrame,
+    ranked: pd.DataFrame,
+    enabled: list[str],
+    max_results: int,
+) -> tuple[list[dict[str, object]], pd.DataFrame]:
+    enabled_set = set(enabled)
+    counts = (
+        hits.groupby("strategy_key").size().astype(int).to_dict()
+        if not hits.empty and "strategy_key" in hits.columns
+        else {}
+    )
+    catalog = []
+    for item in strategy_catalog():
+        key = str(item["key"])
+        enabled_item = key in enabled_set
+        matched_count = int(counts.get(key, 0))
+        catalog.append(
+            {
+                **item,
+                "enabled": enabled_item,
+                "matched_count": matched_count,
+                "result_count": min(matched_count, max_results),
+                "status": "active" if enabled_item else "disabled",
+                "formula_summary": item["description"],
+            }
+        )
+
+    if hits.empty or ranked.empty:
+        return catalog, pd.DataFrame(columns=STRATEGY_SCREENER_RESULT_COLUMNS)
+
+    selected = hits.rename(
+        columns={
+            "strategy_key": "single_strategy_key",
+            "strategy": "single_strategy_name",
+            "strategy_family": "single_strategy_family",
+            "strategy_score_raw": "single_strategy_score",
+            "strategy_reason": "single_strategy_reason",
+        }
+    ).copy()
+    details = ranked.drop_duplicates("code").copy()
+    selected = selected.merge(details, on="code", how="left")
+    selected = selected.sort_values(
+        ["single_strategy_key", "single_strategy_score", "total_score"],
+        ascending=[True, False, False],
+        na_position="last",
+    )
+    selected = selected.groupby("single_strategy_key", sort=False).head(max_results).copy()
+    selected.insert(
+        0,
+        "single_strategy_rank",
+        selected.groupby("single_strategy_key", sort=False).cumcount().add(1),
+    )
+    columns = [
+        column
+        for column in STRATEGY_SCREENER_RESULT_COLUMNS
+        if column in selected.columns
+    ]
+    return catalog, selected[columns].reset_index(drop=True)

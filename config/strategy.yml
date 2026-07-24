@@ -55,7 +55,19 @@ strategies:
     - trend_pullback_reversal
     - low_volatility_rps
     - first_pullback
+    - volume_breakout_pullback
     - sector_leader
   profile: balanced
   strategy_score_weight: 15
   top_per_strategy: 20
+  parameters:
+    volume_breakout_pullback:
+      min_score: 51
+      ignition_min_age: 1
+      ignition_max_age: 12
+      volume_contraction_max: 0.90
+      deep_volume_contraction: 0.60
+      trigger_low_hold_ratio: 0.97
+      platform_hold_ratio: 0.96
+      trend_near_high_ratio: 0.80
+      max_distance_ma20: 22

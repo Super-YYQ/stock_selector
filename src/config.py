@@ -21,6 +21,7 @@ DEFAULT_ENABLED_STRATEGIES = [
     "trend_pullback_reversal",
     "low_volatility_rps",
     "first_pullback",
+    "volume_breakout_pullback",
     "sector_leader",
 ]
 
@@ -87,6 +88,7 @@ class StrategyConfig:
     profile: str = "balanced"
     strategy_score_weight: float = 15
     top_per_strategy: int = 20
+    parameters: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -194,6 +196,8 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("strategies.profile must be one of: balanced, breakout, pullback, steady, custom")
     if config.strategies.top_per_strategy < 1:
         raise ValueError("strategies.top_per_strategy must be greater than 0")
+    if not isinstance(config.strategies.parameters, dict):
+        raise ValueError("strategies.parameters must be a mapping")
 
 
 def load_config(config_dir: str | Path = "config") -> AppConfig:

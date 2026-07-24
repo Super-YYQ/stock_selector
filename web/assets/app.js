@@ -24,7 +24,7 @@
   var viewMeta = {
     overview: ["盘后复盘", "市场概览"],
     watchlist: ["综合排序", "观察名单"],
-    custom: ["公式筛选", "自定义策略"],
+    custom: ["独立筛选", "单策略筛选"],
     strategies: ["规则配置", "策略配置"],
     system: ["数据与任务", "运行状态"]
   };
@@ -146,7 +146,7 @@
     byId("report-date").textContent = "暂无报告";
     byId("focus-table").innerHTML = '<tbody><tr><td class="empty-state">请先执行初始化或每日任务</td></tr></tbody>';
     byId("watchlist-table").innerHTML = '<tbody><tr><td class="empty-state">暂无观察名单</td></tr></tbody>';
-    byId("custom-results-table").innerHTML = '<tbody><tr><td class="empty-state">暂无自定义策略结果</td></tr></tbody>';
+    byId("custom-results-table").innerHTML = '<tbody><tr><td class="empty-state">暂无单策略筛选结果</td></tr></tbody>';
   }
 
   function renderAll() {
@@ -409,9 +409,8 @@
 
   function findStock(code) {
     var payload = state.payload || {};
-    var customResults = state.customStrategies && state.customStrategies.results
-      ? state.customStrategies.results : (payload.custom_strategy_results || []);
-    return (payload.top50 || []).concat(payload.top10 || [], customResults).find(function (row) {
+    var strategyResults = singleStrategySource().results || [];
+    return (payload.top50 || []).concat(payload.top10 || [], strategyResults).find(function (row) {
       return String(row.code || "") === String(code || "");
     });
   }
@@ -475,55 +474,99 @@
   }
 
   var customColumns = [
-    { key: "formula_rank", label: "#", className: function (v) { return "rank-cell " + (Number(v) <= 3 ? "top" : ""); } },
+    { key: "single_strategy_rank", label: "#", className: function (v) { return "rank-cell " + (Number(v) <= 3 ? "top" : ""); } },
     { key: "name", label: "股票", format: stockIdentity },
     { key: "total_score", label: "综合分", className: function () { return "score-cell"; }, format: function (v) { return number(v, 2); } },
     { key: "industry", label: "行业 / 题材", format: contextCell },
     { key: "pct_chg", label: "今日", className: valueClass, format: pct },
     { key: "amount_ratio", label: "量比", format: function (v) { return number(v, 2) + "x"; } },
     { key: "rps20", label: "RPS20", format: function (v) { return number(v, 0); } },
-    { key: "custom_reason", label: "命中摘要", className: function () { return "signal-cell"; }, format: function (v, row) {
-      return '<span class="formula-hit-summary">量比 ' + number(row.amount_ratio, 2) + 'x · RPS20 ' +
-        number(row.rps20, 0) + ' · 距20日线 ' + number(row.distance_ma20, 1) + '%</span>';
+    { key: "single_strategy_reason", label: "命中摘要", className: function () { return "signal-cell"; }, format: function (v) {
+      return '<span class="formula-hit-summary">' + escapeHtml(v || "--") + '</span>';
     } },
     { key: "code", label: "", format: detailButton }
   ];
 
-  function customSource() {
+  function singleStrategySource() {
     var payload = state.payload || {};
-    return state.customStrategies || {
+    var reportedBuiltins = payload.strategy_screeners || [];
+    var reportedByKey = {};
+    reportedBuiltins.forEach(function (item) { reportedByKey[String(item.key || "")] = item; });
+    var builtinCatalog = reportedBuiltins;
+    if (state.strategies && state.strategies.catalog) {
+      var enabledBuiltins = new Set(state.strategies.enabled || []);
+      builtinCatalog = state.strategies.catalog.map(function (item) {
+        return Object.assign({}, reportedByKey[String(item.key || "")] || {}, item, {
+          enabled: enabledBuiltins.has(item.key)
+        });
+      });
+    }
+    builtinCatalog = builtinCatalog.map(function (item) {
+      return Object.assign({}, item, {
+        screen_key: "builtin:" + String(item.key || ""),
+        source_type: "builtin",
+        formula_summary: item.formula_summary || item.description || "--"
+      });
+    });
+
+    var customSource = state.customStrategies || {
       catalog: payload.custom_strategies || [],
       results: payload.custom_strategy_results || []
+    };
+    var customCatalog = (customSource.catalog || []).map(function (item) {
+      return Object.assign({}, item, {
+        screen_key: "formula:" + String(item.key || ""),
+        source_type: "formula"
+      });
+    });
+    var builtinResults = (payload.strategy_screener_results || []).map(function (row) {
+      return Object.assign({}, row, {
+        screen_key: "builtin:" + String(row.single_strategy_key || "")
+      });
+    });
+    var customResults = (customSource.results || []).map(function (row) {
+      return Object.assign({}, row, {
+        screen_key: "formula:" + String(row.custom_strategy_key || ""),
+        single_strategy_rank: row.formula_rank,
+        single_strategy_key: row.custom_strategy_key,
+        single_strategy_name: row.custom_strategy_name,
+        single_strategy_reason: row.custom_reason
+      });
+    });
+    return {
+      catalog: builtinCatalog.concat(customCatalog),
+      results: builtinResults.concat(customResults)
     };
   }
 
   function renderCustomStrategies() {
-    var source = customSource();
+    var source = singleStrategySource();
     var catalog = source.catalog || [];
     var results = source.results || [];
     byId("custom-formula-count").textContent = catalog.length + " 个";
     if (!catalog.length) {
-      byId("custom-formula-list").innerHTML = '<div class="empty-state">暂无自定义公式</div>';
-      byId("custom-result-title").textContent = "自定义策略结果";
+      byId("custom-formula-list").innerHTML = '<div class="empty-state">暂无可用策略</div>';
+      byId("custom-result-title").textContent = "单策略筛选结果";
       byId("custom-result-description").textContent = "--";
-      byId("custom-formula-summary").textContent = "暂无公式定义";
+      byId("custom-formula-summary").textContent = "暂无策略定义";
       byId("custom-match-count").textContent = "0";
       byId("custom-results-table").innerHTML = tableHtml(customColumns, []);
       return;
     }
-    if (!catalog.some(function (item) { return item.key === state.activeCustomKey; })) {
-      state.activeCustomKey = catalog[0].key;
+    if (!catalog.some(function (item) { return item.screen_key === state.activeCustomKey; })) {
+      state.activeCustomKey = catalog[0].screen_key;
     }
     byId("custom-formula-list").innerHTML = catalog.map(function (item) {
-      var active = item.key === state.activeCustomKey;
+      var active = item.screen_key === state.activeCustomKey;
       var disabled = !item.enabled;
       var count = Number(item.matched_count || 0);
       return '<article class="formula-item ' + (active ? "active " : "") + (disabled ? "disabled" : "") + '">' +
-        '<button type="button" data-custom-formula="' + escapeHtml(item.key) + '"><h3>' + escapeHtml(item.name) +
+        '<button type="button" data-custom-formula="' + escapeHtml(item.screen_key) + '"><h3>' + escapeHtml(item.name) +
         '</h3><p>' + escapeHtml(item.description || item.formula_summary || "--") + '</p><small>' +
         (item.status === "error" ? "配置异常" : count + " 只命中") + '</small></button>' +
-        '<label class="switch local-only" title="启用或停用"><input type="checkbox" data-custom-enabled="' +
-        escapeHtml(item.key) + '" ' + (item.enabled ? "checked" : "") + '><span></span></label></article>';
+        '<label class="switch local-only" title="启用或停用"><input type="checkbox" data-screen-enabled="' +
+        escapeHtml(item.key) + '" data-screen-type="' + escapeHtml(item.source_type) + '" ' +
+        (item.enabled ? "checked" : "") + '><span></span></label></article>';
     }).join("");
     all("[data-custom-formula]").forEach(function (button) {
       button.addEventListener("click", function () {
@@ -531,42 +574,69 @@
         renderCustomStrategies();
       });
     });
-    all("[data-custom-enabled]").forEach(function (input) {
+    all("[data-screen-enabled]").forEach(function (input) {
       input.addEventListener("change", function () {
         input.closest(".formula-item").classList.toggle("disabled", !input.checked);
       });
     });
 
-    var activeFormula = catalog.find(function (item) { return item.key === state.activeCustomKey; }) || catalog[0];
+    var activeFormula = catalog.find(function (item) { return item.screen_key === state.activeCustomKey; }) || catalog[0];
     var query = state.customSearch.trim().toLowerCase();
-    var rows = results.filter(function (row) {
-      if (String(row.custom_strategy_key || "") !== String(activeFormula.key || "")) return false;
+    var strategyRows = results.filter(function (row) {
+      return String(row.screen_key || "") === String(activeFormula.screen_key || "");
+    });
+    var rows = strategyRows.filter(function (row) {
       if (!query) return true;
-      return [row.code, row.name, row.industry, row.sector, row.market_board, row.concepts, row.custom_reason].some(function (value) {
+      return [row.code, row.name, row.industry, row.sector, row.market_board, row.concepts, row.single_strategy_reason].some(function (value) {
         return String(value || "").toLowerCase().indexOf(query) >= 0;
       });
     });
-    byId("custom-result-title").textContent = activeFormula.name || "自定义策略结果";
+    var matchedCount = Number(activeFormula.matched_count);
+    if (!Number.isFinite(matchedCount)) matchedCount = strategyRows.length;
+    var summary = activeFormula.error || activeFormula.formula_summary || activeFormula.description || "--";
+    if (matchedCount > strategyRows.length) {
+      summary += "；当前展示综合分靠前的 " + strategyRows.length + " 只";
+    }
+    byId("custom-result-title").textContent = activeFormula.name || "单策略筛选结果";
     byId("custom-result-description").textContent = activeFormula.description || "--";
-    byId("custom-formula-summary").textContent = activeFormula.error || activeFormula.formula_summary || "--";
-    byId("custom-match-count").textContent = rows.length;
+    byId("custom-formula-summary").textContent = summary;
+    byId("custom-match-count").textContent = matchedCount;
     byId("custom-results-table").innerHTML = tableHtml(customColumns, rows);
     bindDetailButtons(byId("custom-results-table"));
     icons();
   }
 
   async function saveCustomStrategies() {
-    var enabled = all("[data-custom-enabled]:checked").map(function (input) { return input.dataset.customEnabled; });
+    var builtinEnabled = all('[data-screen-enabled][data-screen-type="builtin"]:checked').map(function (input) {
+      return input.dataset.screenEnabled;
+    });
+    var formulaEnabled = all('[data-screen-enabled][data-screen-type="formula"]:checked').map(function (input) {
+      return input.dataset.screenEnabled;
+    });
+    if (!builtinEnabled.length) {
+      toast("至少保留一个启用策略");
+      return;
+    }
     var button = byId("save-custom-strategies-button");
     button.disabled = true;
     try {
-      state.customStrategies = await request("/api/custom-strategies", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: enabled })
-      });
+      var saved = await Promise.all([
+        request("/api/strategies", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: builtinEnabled, profile: "custom" })
+        }),
+        request("/api/custom-strategies", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: formulaEnabled })
+        })
+      ]);
+      state.strategies = saved[0];
+      state.customStrategies = saved[1];
       renderCustomStrategies();
-      toast("自定义公式启用状态已保存，下次任务生效");
+      renderStrategies();
+      toast("策略启用状态已保存，下次任务生效");
     } catch (error) {
       toast("保存失败：" + error.message);
     } finally {

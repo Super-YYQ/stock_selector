@@ -108,10 +108,11 @@ Windows 本机的工作日定时任务在面板 **运行状态 → 定时执行*
 
 | 参数 | 默认值 | 作用与可选值 |
 |---|---:|---|
-| `enabled` | 10 个内置策略 | 实际启用的策略 key。完整 key 和规则见 [策略说明](STRATEGIES.md)。 |
+| `enabled` | 11 个内置策略 | 实际启用的策略 key。完整 key 和规则见 [策略说明](STRATEGIES.md)。 |
 | `profile` | `balanced` | 面板显示的组合：`balanced`、`breakout`、`pullback`、`steady`、`custom`。 |
 | `strategy_score_weight` | `15` | 策略原始分换算到总分后的最高权重。 |
 | `top_per_strategy` | `20` | 单个策略保留的最高排名候选数，控制单一策略对名单的覆盖范围。 |
+| `parameters` | `{}` | 各内置策略的可选参数映射；未填写时使用策略默认值。 |
 
 内置策略 key：
 
@@ -125,8 +126,25 @@ Windows 本机的工作日定时任务在面板 **运行状态 → 定时执行*
 | `pullback_stable` | 缩量回踩企稳 |
 | `trend_pullback_reversal` | 趋势回踩转强 |
 | `first_pullback` | 突破后首次回踩 |
+| `volume_breakout_pullback` | 放量突破缩量承接 |
 | `limit_up_shakeout` | 涨停洗盘回踩 |
 | `sector_leader` | 板块共振领涨 |
+
+`volume_breakout_pullback` 可调参数：
+
+| 参数 | 默认值 | 作用 |
+|---|---:|---|
+| `min_score` | `51` | 观察池最低形态分；提高会减少命中数量。 |
+| `ignition_min_age` | `1` | 最近点火日至少间隔的交易日数。 |
+| `ignition_max_age` | `12` | 最近点火日最多回看交易日数。 |
+| `volume_contraction_max` | `0.90` | 回调期平均量相对点火量上限。 |
+| `deep_volume_contraction` | `0.60` | 深度缩量加分阈值。 |
+| `trigger_low_hold_ratio` | `0.97` | 点火最低价支撑容忍比例。 |
+| `platform_hold_ratio` | `0.96` | 原平台支撑容忍比例。 |
+| `trend_near_high_ratio` | `0.80` | 收盘价相对60日高点的最低比例。 |
+| `max_distance_ma20` | `22` | 允许的最大20日线乖离，单位百分点。 |
+
+这些参数用于扩大或收紧观察池。单独的“涨停阶梯”只获得较低策略分；是否进入 Top50 仍取决于 RPS、板块、量价总分和风险扣分。
 
 ## 股票池过滤
 
