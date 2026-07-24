@@ -244,8 +244,8 @@
     if (!rows.length) {
       return head + '<tbody><tr><td class="empty-state" colspan="' + columns.length + '">暂无数据</td></tr></tbody>';
     }
-    var body = rows.map(function (row) {
-      return "<tr>" + columns.map(function (column) {
+    var body = rows.map(function (row, index) {
+      return '<tr style="--row-index:' + index + '">' + columns.map(function (column) {
         var raw = row[column.key];
         var display = column.format ? column.format(raw, row) : escapeHtml(raw);
         var classes = column.className ? column.className(raw, row) : "";
@@ -539,10 +539,79 @@
     };
   }
 
+  function strategyIcon(key, sourceType) {
+    if (sourceType === "formula") return "braces";
+    return ({
+      ma_volume: "bar-chart-3",
+      turtle_breakout: "scan-line",
+      rps_breakout: "gauge",
+      pullback_stable: "rotate-ccw",
+      limit_up_shakeout: "candlestick-chart",
+      volatility_squeeze: "minimize-2",
+      trend_pullback_reversal: "route",
+      low_volatility_rps: "shield-check",
+      first_pullback: "corner-down-left",
+      volume_breakout_pullback: "target",
+      sector_leader: "network"
+    })[key] || "activity";
+  }
+
+  function animateInteger(node, target) {
+    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var start = Number(node.dataset.value || 0);
+    var end = Number(target || 0);
+    node.dataset.value = String(end);
+    if (reduced || start === end) {
+      node.textContent = end;
+      return;
+    }
+    var started = performance.now();
+    var duration = 620;
+    function tick(now) {
+      var progress = Math.min(1, (now - started) / duration);
+      var eased = 1 - Math.pow(1 - progress, 3);
+      node.textContent = Math.round(start + (end - start) * eased);
+      if (progress < 1) window.requestAnimationFrame(tick);
+    }
+    window.requestAnimationFrame(tick);
+  }
+
+  function centerActiveFormula() {
+    var formulaList = byId("custom-formula-list");
+    if (!formulaList || !formulaList.clientWidth) return;
+    var activeCard = formulaList.querySelector(".formula-item.active");
+    if (!activeCard) return;
+    var left = activeCard.offsetLeft - (formulaList.clientWidth - activeCard.offsetWidth) / 2;
+    formulaList.scrollTo({
+      left: Math.max(0, left),
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
+    });
+  }
+
   function renderCustomStrategies() {
     var source = singleStrategySource();
     var catalog = source.catalog || [];
     var results = source.results || [];
+    var visualOrder = [
+      "ma_volume",
+      "rps_breakout",
+      "turtle_breakout",
+      "pullback_stable",
+      "limit_up_shakeout",
+      "volatility_squeeze",
+      "volume_breakout_pullback",
+      "trend_pullback_reversal",
+      "low_volatility_rps",
+      "first_pullback",
+      "sector_leader"
+    ];
+    catalog.sort(function (left, right) {
+      var leftIndex = visualOrder.indexOf(String(left.key || ""));
+      var rightIndex = visualOrder.indexOf(String(right.key || ""));
+      if (leftIndex < 0) leftIndex = visualOrder.length + (left.source_type === "formula" ? 1 : 0);
+      if (rightIndex < 0) rightIndex = visualOrder.length + (right.source_type === "formula" ? 1 : 0);
+      return leftIndex - rightIndex;
+    });
     byId("custom-formula-count").textContent = catalog.length + " 个";
     if (!catalog.length) {
       byId("custom-formula-list").innerHTML = '<div class="empty-state">暂无可用策略</div>';
@@ -554,20 +623,27 @@
       return;
     }
     if (!catalog.some(function (item) { return item.screen_key === state.activeCustomKey; })) {
-      state.activeCustomKey = catalog[0].screen_key;
+      var preferredStrategy = catalog.find(function (item) {
+        return item.key === "volume_breakout_pullback";
+      });
+      state.activeCustomKey = (preferredStrategy || catalog[0]).screen_key;
     }
-    byId("custom-formula-list").innerHTML = catalog.map(function (item) {
+    byId("custom-formula-list").innerHTML = catalog.map(function (item, index) {
       var active = item.screen_key === state.activeCustomKey;
       var disabled = !item.enabled;
       var count = Number(item.matched_count || 0);
       return '<article class="formula-item ' + (active ? "active " : "") + (disabled ? "disabled" : "") + '">' +
-        '<button type="button" data-custom-formula="' + escapeHtml(item.screen_key) + '"><h3>' + escapeHtml(item.name) +
+        '<button type="button" data-custom-formula="' + escapeHtml(item.screen_key) + '">' +
+        '<span class="formula-order">' + String(index + 1).padStart(2, "0") + '</span>' +
+        '<span class="formula-icon"><i data-lucide="' + strategyIcon(item.key, item.source_type) + '"></i></span>' +
+        '<h3>' + escapeHtml(item.name) +
         '</h3><p>' + escapeHtml(item.description || item.formula_summary || "--") + '</p><small>' +
         (item.status === "error" ? "配置异常" : count + " 只命中") + '</small></button>' +
         '<label class="switch local-only" title="启用或停用"><input type="checkbox" data-screen-enabled="' +
         escapeHtml(item.key) + '" data-screen-type="' + escapeHtml(item.source_type) + '" ' +
         (item.enabled ? "checked" : "") + '><span></span></label></article>';
     }).join("");
+    window.requestAnimationFrame(centerActiveFormula);
     all("[data-custom-formula]").forEach(function (button) {
       button.addEventListener("click", function () {
         state.activeCustomKey = button.dataset.customFormula;
@@ -600,7 +676,7 @@
     byId("custom-result-title").textContent = activeFormula.name || "单策略筛选结果";
     byId("custom-result-description").textContent = activeFormula.description || "--";
     byId("custom-formula-summary").textContent = summary;
-    byId("custom-match-count").textContent = matchedCount;
+    animateInteger(byId("custom-match-count"), matchedCount);
     byId("custom-results-table").innerHTML = tableHtml(customColumns, rows);
     bindDetailButtons(byId("custom-results-table"));
     icons();
@@ -917,7 +993,26 @@
     });
     byId("view-context").textContent = viewMeta[name][0];
     byId("view-title").textContent = viewMeta[name][1];
+    document.body.dataset.activeView = name;
+    var activeView = byId("view-" + name);
+    activeView.classList.remove("view-enter");
+    window.requestAnimationFrame(function () {
+      activeView.classList.add("view-enter");
+      if (name === "custom") centerActiveFormula();
+    });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function bindPointerAura() {
+    var aura = byId("pointer-aura");
+    if (!aura || !window.matchMedia("(pointer: fine)").matches) return;
+    document.addEventListener("pointermove", function (event) {
+      aura.style.transform = "translate3d(" + event.clientX + "px," + event.clientY + "px,0)";
+      aura.classList.add("visible");
+    });
+    document.addEventListener("pointerdown", function () { aura.classList.add("pressed"); });
+    document.addEventListener("pointerup", function () { aura.classList.remove("pressed"); });
+    document.addEventListener("pointerleave", function () { aura.classList.remove("visible"); });
   }
 
   async function startRun(mode) {
@@ -1037,6 +1132,7 @@
   }
 
   bind();
+  bindPointerAura();
   icons();
   load();
   window.setInterval(function () {

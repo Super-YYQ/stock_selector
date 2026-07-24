@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#151d1b">
+  <meta name="theme-color" content="#031527">
   <title>A股盘后选股助手</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260724-1">
+  <link rel="preload" as="image" href="assets/fluid-market-field.png">
+  <link rel="stylesheet" href="assets/app.css?v=20260724-2">
 </head>
-<body>
+<body data-active-view="overview">
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <span class="brand-mark">A</span>
-        <span><strong>盘后选股助手</strong><small>A股 · 盘后</small></span>
+        <span class="brand-mark"><i data-lucide="trending-up"></i></span>
+        <span><strong>FLUID EXCHANGE</strong><small>A股盘后选股助手</small></span>
       </div>
       <nav class="nav-list" aria-label="主导航">
         <button class="nav-item active" data-view="overview"><i data-lucide="layout-dashboard"></i><span>市场概览</span></button>
@@ -29,12 +30,13 @@
 
     <div class="workspace">
       <header class="topbar">
+        <div class="fluid-wordmark"><strong>FLUID EXCHANGE</strong><small>A股盘后选股助手</small></div>
         <div class="title-row">
           <div>
             <p class="page-context" id="view-context">盘后复盘</p>
             <h1 id="view-title">市场概览</h1>
           </div>
-          <span class="report-date" id="report-date">--</span>
+          <span class="report-date"><i data-lucide="calendar-days"></i><b id="report-date">--</b></span>
           <button class="icon-button" id="refresh-button" title="刷新数据" aria-label="刷新数据"><i data-lucide="refresh-cw"></i></button>
         </div>
         <div class="topbar-actions">
@@ -138,6 +140,18 @@
         </section>
 
         <section class="view page-view" id="view-custom">
+          <section class="single-hero">
+            <div class="single-hero-copy">
+              <span class="section-label">FACTORS / SIGNALS / AFTER HOURS</span>
+              <h2>单策略筛选</h2>
+              <p>基于盘后数据的因子模型，独立查看每种策略的命中股票与量价证据。</p>
+            </div>
+            <div class="custom-result-count">
+              <span>策略命中总数</span>
+              <strong id="custom-match-count">0</strong>
+              <em>只股票</em>
+            </div>
+          </section>
           <div class="custom-layout">
             <aside class="formula-index">
               <div class="surface-heading"><div><span class="section-label">独立选股</span><h2>策略目录</h2></div><span class="muted" id="custom-formula-count">--</span></div>
@@ -147,7 +161,6 @@
             <section class="custom-results">
               <div class="custom-result-header">
                 <div><span class="section-label">当日命中</span><h2 id="custom-result-title">单策略筛选结果</h2><p id="custom-result-description">--</p></div>
-                <div class="custom-result-count"><strong id="custom-match-count">0</strong><span>只股票</span></div>
               </div>
               <div class="formula-summary" id="custom-formula-summary">--</div>
               <div class="toolbar custom-toolbar">
@@ -237,7 +250,8 @@
   </aside>
 
   <div class="toast" id="toast" role="status"></div>
+  <div class="pointer-aura" id="pointer-aura" aria-hidden="true"></div>
   <script src="assets/lucide.min.js"></script>
-  <script src="assets/app.js?v=20260724-1"></script>
+  <script src="assets/app.js?v=20260724-2"></script>
 </body>
 </html>
