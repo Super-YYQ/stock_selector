@@ -7,6 +7,7 @@ data:
   tdx_timeout_seconds: 3
   tdx_query_retries: 3
   init_min_stock_coverage: 0.90
+  min_latest_stock_coverage: 0.98
   init_min_daily_rows: 100000
   init_min_index_count: 3
   analysis_lookback_days: 240

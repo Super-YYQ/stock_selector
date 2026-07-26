@@ -2,6 +2,8 @@ param(
     [ValidateSet("install", "uninstall")]
     [string]$Operation,
     [string]$Time = "17:30",
+    [switch]$Midday,
+    [string]$MiddayTime = "12:30",
     [switch]$Publish
 )
 
@@ -11,6 +13,9 @@ $Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"{0}"' -f 
 
 if ($Operation -eq "install") {
     $Arguments += @("-Time", $Time)
+    if ($Midday) {
+        $Arguments += @("-Midday", "-MiddayTime", $MiddayTime)
+    }
     if ($Publish) {
         $Arguments += "-Publish"
     }

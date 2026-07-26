@@ -64,6 +64,8 @@ class CustomStrategyUpdate(BaseModel):
 class SchedulerUpdate(BaseModel):
     enabled: bool
     time: str = Field(default="17:30", pattern="^(?:[01]\\d|2[0-3]):[0-5]\\d$")
+    midday_enabled: bool = False
+    midday_time: str = Field(default="12:30", pattern="^(?:[01]\\d|2[0-3]):[0-5]\\d$")
     publish: bool = False
 
 
@@ -236,6 +238,8 @@ def save_scheduler(update: SchedulerUpdate) -> dict[str, Any]:
             ROOT,
             enabled=update.enabled,
             time=update.time,
+            midday_enabled=update.midday_enabled,
+            midday_time=update.midday_time,
             publish=update.publish,
         )
     except SchedulerError as exc:

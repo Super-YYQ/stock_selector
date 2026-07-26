@@ -59,11 +59,58 @@ def test_update_scheduler_uses_allowlisted_script_arguments(tmp_path: Path, monk
     assert calls[1][0] == "scheduler_status.ps1"
 
 
+def test_update_scheduler_adds_optional_midday_trigger_arguments(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_run(root: Path, name: str, arguments: list[str] | None = None) -> str:
+        calls.append((name, arguments or []))
+        return json.dumps(
+            {
+                "supported": True,
+                "enabled": True,
+                "time": "17:30",
+                "midday_enabled": True,
+                "midday_time": "12:20",
+            }
+        )
+
+    monkeypatch.setattr(scheduler, "_is_windows", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_script", fake_run)
+
+    scheduler.update_scheduler(
+        tmp_path,
+        enabled=True,
+        time="17:30",
+        publish=False,
+        midday_enabled=True,
+        midday_time="12:20",
+    )
+
+    assert calls[0] == (
+        "install_scheduler.ps1",
+        ["-Time", "17:30", "-Midday", "-MiddayTime", "12:20"],
+    )
+
+
 def test_update_scheduler_rejects_invalid_time(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(scheduler, "_is_windows", lambda: True)
 
     with pytest.raises(scheduler.SchedulerError, match="HH:MM"):
         scheduler.update_scheduler(tmp_path, enabled=True, time="25:90", publish=False)
+
+
+def test_update_scheduler_rejects_midday_after_close(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(scheduler, "_is_windows", lambda: True)
+
+    with pytest.raises(scheduler.SchedulerError, match="早于"):
+        scheduler.update_scheduler(
+            tmp_path,
+            enabled=True,
+            time="12:00",
+            publish=False,
+            midday_enabled=True,
+            midday_time="12:30",
+        )
 
 
 def test_update_scheduler_retries_permission_error_with_uac(tmp_path: Path, monkeypatch) -> None:

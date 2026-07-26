@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#031527">
   <title>A股盘后选股助手</title>
   <link rel="preload" as="image" href="assets/fluid-market-field.png">
-  <link rel="stylesheet" href="assets/app.css?v=20260724-2">
+  <link rel="stylesheet" href="assets/app.css?v=20260726-1">
 </head>
 <body data-active-view="overview">
   <div class="app-shell">
@@ -209,11 +209,12 @@
             <div class="scheduler-layout">
               <div class="scheduler-summary">
                 <div class="scheduler-icon"><i data-lucide="calendar-clock"></i></div>
-                <div><strong id="scheduler-summary-title">工作日盘后自动复盘</strong><p id="scheduler-summary-text">每周一至周五按设定时间执行；错过时间后将在电脑恢复可用时补跑。</p></div>
+                <div><strong id="scheduler-summary-title">工作日自动复盘</strong><p id="scheduler-summary-text">可同时设置午间盘中快照和盘后正式复盘；错过时间后将在电脑恢复可用时补跑。</p></div>
               </div>
               <div class="scheduler-controls">
-                <label><span>执行时间</span><input id="scheduler-time" type="time" value="17:30" step="60"></label>
-                <label class="scheduler-publish"><input id="scheduler-publish" type="checkbox"><span><b>完成后推送网页报告</b><small>定时和手动任务均生效；需要 GitHub 推送权限</small></span></label>
+                <label><span>盘后正式复盘</span><input id="scheduler-time" type="time" value="17:30" step="60"></label>
+                <label><span>午间盘中快照</span><span class="scheduler-midday-control"><input id="scheduler-midday-enabled" type="checkbox" aria-label="启用午间盘中快照"><input id="scheduler-midday-time" type="time" value="12:30" step="60" aria-label="午间盘中快照时间"></span></label>
+                <label class="scheduler-publish"><input id="scheduler-publish" type="checkbox"><span><b>完成后推送网页报告</b><small>午间和盘后任务均生效；需要 GitHub 推送权限</small></span></label>
                 <div class="scheduler-actions"><button class="primary-button" id="save-scheduler-button"><i data-lucide="calendar-check"></i><span>启用并保存</span></button><button class="ghost-button" id="disable-scheduler-button"><i data-lucide="calendar-x"></i><span>停用</span></button></div>
               </div>
             </div>
@@ -252,6 +253,6 @@
   <div class="toast" id="toast" role="status"></div>
   <div class="pointer-aura" id="pointer-aura" aria-hidden="true"></div>
   <script src="assets/lucide.min.js"></script>
-  <script src="assets/app.js?v=20260724-2"></script>
+  <script src="assets/app.js?v=20260726-1"></script>
 </body>
 </html>

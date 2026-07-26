@@ -131,6 +131,37 @@ def test_tdx_fetcher_switches_host_after_connection_failure() -> None:
     assert daily["code"].tolist() == ["000001"]
     assert daily["trade_date"].tolist() == ["2026-06-22"]
 
+
+def test_tdx_initial_connection_checks_every_configured_host() -> None:
+    from src.fetch_data import TdxDataFetcher
+
+    attempted: list[str] = []
+
+    class FakeApi:
+        def connect(self, ip: str, port: int, time_out: float) -> bool:
+            attempted.append(ip)
+            return ip == "127.0.0.3"
+
+        def disconnect(self) -> None:
+            pass
+
+    fetcher = TdxDataFetcher(
+        "2026-06-01",
+        query_retries=1,
+        hosts=(
+            ("first", "127.0.0.1", 7709),
+            ("second", "127.0.0.2", 7709),
+            ("third", "127.0.0.3", 7709),
+        ),
+        api_factory=FakeApi,
+    )
+
+    with fetcher:
+        pass
+
+    assert attempted == ["127.0.0.1", "127.0.0.2", "127.0.0.3"]
+
+
 def test_normalize_akshare_sector_supports_chinese_columns() -> None:
     raw = pd.DataFrame(
         [

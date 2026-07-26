@@ -23,6 +23,7 @@
 - 双报告：格式化 Excel + 响应式网页
 - 管理面板：每日简报、单策略筛选、策略开关、任务执行、数据健康和报告下载
 - 自动化：Windows 计划任务、Docker Compose、GitHub Pages
+- 双时段复盘：可选工作日午间盘中快照，盘后重新抓取当日日线并生成正式报告
 
 ## Windows 快速开始
 
@@ -85,14 +86,14 @@ py -3.12 --version
 | `stop.bat` | 安全停止本地管理面板 |
 | `init.bat` | 初始化或补全历史数据 |
 | `daily.bat` | 执行一次每日增量更新和选股 |
-| `install_scheduler.bat` | 安装工作日 17:30 自动任务 |
+| `install_scheduler.bat` | 安装工作日盘后自动任务；午间快照可在面板中启用 |
 | `install_scheduler_publish.bat` | 自动运行，并将网页报告推送到 GitHub |
 | `uninstall_scheduler.bat` | 删除自动任务 |
 
 时间可通过 PowerShell 自定义：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18:00"
+powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18:00" -Midday -MiddayTime "12:30"
 ```
 
 ## 管理面板
@@ -128,7 +129,9 @@ powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18
 
 显示数据覆盖、最新交易日、日线数量、当前任务输出和最近运行记录。
 
-“定时执行”可直接管理 Windows 计划任务：设置工作日执行时间、启用或停用自动复盘，并选择任务完成后是否自动推送网页报告。默认时间为 17:30；电脑关机期间不会执行，恢复可用后会补跑一次。
+“定时执行”可直接管理 Windows 计划任务：分别设置工作日午间盘中快照和盘后正式复盘，并选择任务完成后是否自动推送网页报告。盘后默认时间为 17:30，午间快照默认关闭、建议设为 12:30；电脑关机期间不会执行，恢复可用后会补跑一次。
+
+午间任务使用当时尚未收盘的当日日 K 生成临时观察结果，页面和 Excel 会明确显示“盘中快照”。它不会写入正式入选历史，也不会回填策略未来收益。盘后任务会再次抓取同一交易日，将午间未完成日 K 替换为收盘数据，再生成正式报告。
 
 > 修改计划任务后如果 Windows 弹出权限提示，请允许当前用户创建计划任务。GitHub Pages 自动推送还要求本机 Git 已完成登录。
 
@@ -277,6 +280,9 @@ chmod +x start.sh daily.sh
 
 # 每日增量
 .\.venv\Scripts\python.exe run_daily.py
+
+# 强制生成盘中临时快照
+.\.venv\Scripts\python.exe run_daily.py --snapshot intraday
 
 # 指定日期重跑
 .\.venv\Scripts\python.exe run_daily.py --date 2026-06-22

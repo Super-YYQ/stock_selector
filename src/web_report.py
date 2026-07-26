@@ -55,11 +55,15 @@ def build_report_payload(
     strategy_screener_results: pd.DataFrame | None = None,
     custom_strategies: list[dict[str, Any]] | None = None,
     custom_strategy_results: pd.DataFrame | None = None,
+    snapshot_type: str = "close",
 ) -> dict[str, Any]:
+    is_provisional = snapshot_type == "intraday"
     return {
         "schema_version": 1,
         "report_date": report_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "snapshot_type": snapshot_type,
+        "is_provisional": is_provisional,
         "market": _json_value(market),
         "health": _json_value(health),
         "summary": {
@@ -76,7 +80,11 @@ def build_report_payload(
         "strategy_screener_results": _records(strategy_screener_results),
         "custom_strategies": _json_value(custom_strategies or []),
         "custom_strategy_results": _records(custom_strategy_results),
-        "disclaimer": "仅用于盘后复盘和观察名单筛选，不构成投资建议，不执行自动交易。",
+        "disclaimer": (
+            "盘中临时快照，当日日K尚未收盘，仅供观察，不写入正式策略收益历史。"
+            if is_provisional
+            else "仅用于盘后复盘和观察名单筛选，不构成投资建议，不执行自动交易。"
+        ),
     }
 
 

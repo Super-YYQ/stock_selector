@@ -45,3 +45,20 @@ def test_static_report_writes_latest_and_history(tmp_path: Path) -> None:
     assert latest["custom_strategy_results"] == []
     assert (tmp_path / "site" / "data" / "history" / "2026-06-22.json").exists()
     assert (tmp_path / "site" / "assets" / "app.css").exists()
+
+
+def test_build_report_payload_marks_intraday_snapshot_as_provisional() -> None:
+    payload = build_report_payload(
+        "2026-06-22",
+        {"market_score": 5},
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {"stock_coverage": 1},
+        snapshot_type="intraday",
+    )
+
+    assert payload["snapshot_type"] == "intraday"
+    assert payload["is_provisional"] is True
+    assert "盘中" in payload["disclaimer"]

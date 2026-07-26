@@ -1,6 +1,13 @@
 import pandas as pd
 
-from src.indicators import add_returns, add_rps, moving_average, pct_change_over
+from src.indicators import (
+    add_returns,
+    add_rps,
+    is_limit_up,
+    is_price_jump_anomaly,
+    moving_average,
+    pct_change_over,
+)
 
 
 def test_pct_change_over_uses_period_ago_close() -> None:
@@ -44,3 +51,14 @@ def test_moving_average_returns_rolling_mean() -> None:
     result = moving_average(pd.Series([1, 2, 3], dtype=float), 2)
 
     assert result.tolist() == [1.0, 1.5, 2.5]
+
+
+def test_price_limits_follow_a_share_board_rules() -> None:
+    assert is_limit_up("000001", 9.8)
+    assert not is_limit_up("300001", 10.0)
+    assert is_limit_up("300001", 19.8)
+    assert not is_limit_up("300001", 4.8, is_st=True)
+    assert is_limit_up("300001", 19.8, is_st=True)
+    assert is_limit_up("920001", 29.8)
+    assert is_limit_up("000001", 4.8, is_st=True)
+    assert is_price_jump_anomaly("000001", -37)

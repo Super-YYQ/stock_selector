@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 
 from src.config import StockPoolConfig
+from src.indicators import is_price_jump_anomaly
 from src.sector_score import market_board
 
 
@@ -68,6 +69,10 @@ def build_stock_pool(
         )
     if config.exclude_suspended:
         add_reason(pool["is_suspended"].fillna(0).astype(int).eq(1) | pool["close"].isna(), "停牌或无当日行情")
+    add_reason(
+        pool["trade_date"].fillna("").astype(str).ne(report_date),
+        "缺少报告日行情",
+    )
     def effective_list_days(row: pd.Series) -> int | None:
         list_days = _list_days(row.get("list_date", ""), report_date)
         return list_days if list_days is not None else _list_days(row.get("first_trade_date", ""), report_date)
@@ -93,6 +98,36 @@ def build_stock_pool(
     add_reason(
         pool["pct_sum"].fillna(0).gt(35) & pool["amount_last"].fillna(0).lt(pool["amount_mean"].fillna(0) * 0.7),
         "连续大涨后高位缩量",
+    )
+
+    is_st = (
+        pd.to_numeric(basic["is_st"], errors="coerce").fillna(0)
+        if "is_st" in basic.columns
+        else pd.Series(0, index=basic.index)
+    )
+    st_codes = set(basic.loc[is_st.eq(1), "code"].astype(str))
+    recent_quality = (
+        daily[daily["trade_date"] <= report_date]
+        .sort_values(["code", "trade_date"])
+        .groupby("code")
+        .tail(60)[["code", "pct_chg"]]
+        .copy()
+    )
+    def price_jump_anomaly(row: pd.Series) -> bool:
+        value = pd.to_numeric(row["pct_chg"], errors="coerce")
+        pct_chg = 0.0 if pd.isna(value) else float(value)
+        code = str(row["code"])
+        return is_price_jump_anomaly(code, pct_chg, code in st_codes)
+
+    recent_quality["price_jump_anomaly"] = recent_quality.apply(price_jump_anomaly, axis=1)
+    anomaly_by_code = (
+        recent_quality.groupby("code", as_index=False)["price_jump_anomaly"]
+        .max()
+    )
+    pool = pool.merge(anomaly_by_code, on="code", how="left")
+    add_reason(
+        pool["price_jump_anomaly"].fillna(False),
+        "最近60日存在疑似除权或异常价格跳变",
     )
 
     filtered = pool[pool["filter_reason"] != ""].copy()

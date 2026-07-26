@@ -266,6 +266,7 @@ class Database:
                     ).fetchone()[0]
                 )
         coverage = covered_symbols / active_symbols if active_symbols else 0.0
+        latest_coverage = latest_symbol_count / active_symbols if active_symbols else 0.0
         return {
             "active_symbols": active_symbols,
             "covered_symbols": covered_symbols,
@@ -274,11 +275,10 @@ class Database:
             "index_symbols": index_symbols,
             "latest_trade_date": latest_trade_date,
             "latest_symbol_count": latest_symbol_count,
+            "latest_stock_coverage": latest_coverage,
         }
 
     def save_selections(self, report_date: str, ranked: pd.DataFrame, top_n: int = 50) -> int:
-        if ranked.empty:
-            return 0
         selected = ranked.head(top_n).copy()
         now = datetime.now().isoformat(timespec="seconds")
         defaults: dict[str, object] = {
@@ -305,7 +305,21 @@ class Database:
             "created_at",
             "updated_at",
         ]
-        return self.upsert_dataframe("selection_history", selected[columns], ["report_date", "code"])
+        records = (
+            selected[columns].where(pd.notna(selected[columns]), None).to_records(index=False).tolist()
+            if not selected.empty
+            else []
+        )
+        marks = ", ".join(["?"] * len(columns))
+        with self.connect() as conn:
+            conn.execute("DELETE FROM selection_history WHERE report_date = ?", (report_date,))
+            if records:
+                conn.executemany(
+                    f"INSERT INTO selection_history ({', '.join(columns)}) VALUES ({marks})",
+                    records,
+                )
+            conn.commit()
+        return len(records)
 
     def refresh_selection_returns(self) -> int:
         with self.connect() as conn:

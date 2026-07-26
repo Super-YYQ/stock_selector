@@ -65,7 +65,16 @@ def build_ranked_results(
         result["rps20"].fillna(0) * 0.6 + result["rps60"].fillna(0) * 0.4,
         scoring.relative_strength_weight,
     )
-    result["market_adjust_score"] = float(market.get("market_score", 5)) / 10 * scoring.market_adjust_weight
+    relative_strength_raw = result["rps20"].fillna(0) * 0.6 + result["rps60"].fillna(0) * 0.4
+    setup_strength = (
+        result["volume_price_score_raw"].fillna(0) * 0.45
+        + result["strategy_score_raw"].fillna(0) * 0.35
+        + relative_strength_raw * 0.20
+    ).clip(lower=0, upper=100) / 100
+    market_regime = max(-1.0, min(1.0, (float(market.get("market_score", 5)) - 5) / 5))
+    result["market_adjust_score"] = (
+        setup_strength * market_regime * scoring.market_adjust_weight
+    ).round(2)
     result["total_score"] = (
         result["sector_score"]
         + result["stock_character_score"]

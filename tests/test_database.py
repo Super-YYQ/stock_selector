@@ -123,6 +123,29 @@ def test_selection_history_refreshes_forward_returns_and_performance(tmp_path: P
     assert set(performance["strategy"]) == {"均线放量突破", "RPS强势突破"}
 
 
+def test_save_selections_replaces_previous_snapshot_for_same_date(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    first = pd.DataFrame(
+        [
+            {"rank": 1, "code": "000001", "total_score": 90, "close": 10},
+            {"rank": 2, "code": "000002", "total_score": 80, "close": 20},
+        ]
+    )
+    second = pd.DataFrame(
+        [
+            {"rank": 1, "code": "000002", "total_score": 95, "close": 21},
+        ]
+    )
+
+    db.save_selections("2026-06-22", first, top_n=2)
+    db.save_selections("2026-06-22", second, top_n=1)
+
+    stored = db.read_table("selection_history")
+    assert stored["code"].tolist() == ["000002"]
+    assert stored.loc[0, "total_score"] == 95
+
+
 def test_run_history_records_status(tmp_path: Path) -> None:
     db = Database(tmp_path / "stock.db")
     db.initialize()

@@ -135,8 +135,10 @@ class TdxDataFetcher:
         if self._api is not None:
             return
         errors: list[str] = []
-        attempts = max(1, min(len(self.hosts), self.query_retries + 1))
-        for _ in range(attempts):
+        # A connection attempt is cheap compared with a full daily update. Check
+        # every configured endpoint before declaring the provider unavailable;
+        # query_retries controls request-level retries after a connection exists.
+        for _ in range(len(self.hosts)):
             host = self.hosts[self._host_cursor]
             self._host_cursor = (self._host_cursor + 1) % len(self.hosts)
             api = self._new_api()

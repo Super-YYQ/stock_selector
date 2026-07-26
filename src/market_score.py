@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.indicators import moving_average
+from src.indicators import is_limit_down, is_limit_up, moving_average
 
 
 def _latest_index(index_daily: pd.DataFrame, index_code: str, report_date: str) -> pd.DataFrame:
@@ -11,11 +11,42 @@ def _latest_index(index_daily: pd.DataFrame, index_code: str, report_date: str) 
     )
 
 
-def calculate_market_score(index_daily: pd.DataFrame, stock_daily: pd.DataFrame, report_date: str) -> dict[str, object]:
+def calculate_market_score(
+    index_daily: pd.DataFrame,
+    stock_daily: pd.DataFrame,
+    report_date: str,
+    stock_basic: pd.DataFrame | None = None,
+) -> dict[str, object]:
     latest_stocks = stock_daily[stock_daily["trade_date"] == report_date].copy()
+    st_codes: set[str] = set()
+    if stock_basic is not None and not stock_basic.empty and {"code", "is_st"} <= set(stock_basic.columns):
+        st_codes = set(
+            stock_basic.loc[
+                pd.to_numeric(stock_basic["is_st"], errors="coerce").fillna(0).eq(1),
+                "code",
+            ].astype(str)
+        )
     up_ratio = round((latest_stocks["pct_chg"].gt(0).mean() * 100) if not latest_stocks.empty else 0, 2)
-    limit_up_count = int(latest_stocks["pct_chg"].ge(9.5).sum()) if "pct_chg" in latest_stocks else 0
-    limit_down_count = int(latest_stocks["pct_chg"].le(-9.5).sum()) if "pct_chg" in latest_stocks else 0
+    limit_up_count = (
+        int(
+            latest_stocks.apply(
+                lambda row: is_limit_up(str(row["code"]), float(row["pct_chg"]), str(row["code"]) in st_codes),
+                axis=1,
+            ).sum()
+        )
+        if "pct_chg" in latest_stocks
+        else 0
+    )
+    limit_down_count = (
+        int(
+            latest_stocks.apply(
+                lambda row: is_limit_down(str(row["code"]), float(row["pct_chg"]), str(row["code"]) in st_codes),
+                axis=1,
+            ).sum()
+        )
+        if "pct_chg" in latest_stocks
+        else 0
+    )
 
     score = 0.0
     index_changes: dict[str, float] = {}

@@ -88,3 +88,31 @@ def test_build_stock_pool_excludes_configured_market_boards() -> None:
     assert eligible["code"].tolist() == ["000001"]
     assert set(filtered["code"]) == {"920001", "688001"}
     assert filtered["filter_reason"].str.contains("已排除市场板块").all()
+
+
+def test_build_stock_pool_excludes_stale_and_recent_price_jump_data() -> None:
+    basic = pd.DataFrame(
+        [
+            {"code": "000001", "name": "Stale", "industry": "Bank", "list_date": "2020-01-01", "is_st": 0},
+            {"code": "000002", "name": "Jump", "industry": "Tech", "list_date": "2020-01-01", "is_st": 0},
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {"code": "000001", "trade_date": "2026-06-21", "close": 10, "amount": 200000000, "is_suspended": 0, "pct_chg": 1},
+            {"code": "000002", "trade_date": "2026-06-21", "close": 20, "amount": 200000000, "is_suspended": 0, "pct_chg": -35},
+            {"code": "000002", "trade_date": "2026-06-22", "close": 20, "amount": 200000000, "is_suspended": 0, "pct_chg": 1},
+        ]
+    )
+
+    eligible, filtered = build_stock_pool(
+        basic,
+        daily,
+        "2026-06-22",
+        StockPoolConfig(min_avg_amount_20d=0),
+    )
+
+    assert eligible.empty
+    reasons = filtered.set_index("code")["filter_reason"]
+    assert "缺少报告日行情" in reasons["000001"]
+    assert "异常价格跳变" in reasons["000002"]
