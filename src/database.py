@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+
+
+LOGGER = logging.getLogger(__name__)
+SQLITE_BUSY_TIMEOUT_MS = 5_000
+STOCK_DAILY_ROWS_KEY = "health.stock_daily_rows"
+STOCK_DAILY_MAX_ROWID_KEY = "health.stock_daily_max_rowid"
+STOCK_DAILY_ROWS_UPDATED_AT_KEY = "health.stock_daily_rows_updated_at"
+STOCK_DAILY_HEALTH_KEYS = (
+    STOCK_DAILY_ROWS_KEY,
+    STOCK_DAILY_MAX_ROWID_KEY,
+    STOCK_DAILY_ROWS_UPDATED_AT_KEY,
+)
 
 
 SCHEMA_SQL = """
@@ -154,12 +167,19 @@ class Database:
 
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1_000)
         conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         return conn
 
     def initialize(self) -> None:
         with self.connect() as conn:
+            try:
+                conn.execute("PRAGMA journal_mode = WAL")
+            except sqlite3.DatabaseError as exc:
+                # Some network filesystems and read-only deployments cannot use WAL.
+                # Keep the existing journal mode instead of preventing startup.
+                LOGGER.warning("SQLite WAL mode is unavailable, keeping the current journal mode: %s", exc)
             conn.executescript(SCHEMA_SQL)
             conn.commit()
 
@@ -188,6 +208,12 @@ class Database:
         records = df.where(pd.notna(df), None).to_records(index=False).tolist()
         with self.connect() as conn:
             conn.executemany(sql, records)
+            if table == "stock_daily":
+                marks = ", ".join(["?"] * len(STOCK_DAILY_HEALTH_KEYS))
+                conn.execute(
+                    f"DELETE FROM run_metadata WHERE key IN ({marks})",
+                    STOCK_DAILY_HEALTH_KEYS,
+                )
             conn.commit()
         return len(records)
 
@@ -239,32 +265,92 @@ class Database:
             rows = conn.execute(sql, params).fetchall()
         return {str(row["code"]) for row in rows}
 
-    def data_health(self) -> dict[str, object]:
+    @staticmethod
+    def _metadata_values(conn: sqlite3.Connection, keys: tuple[str, ...]) -> dict[str, str]:
+        marks = ", ".join(["?"] * len(keys))
+        rows = conn.execute(
+            f"SELECT key, value FROM run_metadata WHERE key IN ({marks})",
+            keys,
+        ).fetchall()
+        return {str(row["key"]): str(row["value"]) for row in rows}
+
+    @staticmethod
+    def _active_symbol_count(conn: sqlite3.Connection, trade_date: str | None = None) -> int:
+        date_filter = ""
+        params: tuple[object, ...] = ()
+        if trade_date is not None:
+            date_filter = " AND d.trade_date = ?"
+            params = (trade_date,)
+        return int(
+            conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM stock_basic b
+                WHERE COALESCE(b.is_listed, 1) = 1
+                  AND EXISTS (
+                      SELECT 1
+                      FROM stock_daily d
+                      WHERE d.code = b.code{date_filter}
+                  )
+                """,
+                params,
+            ).fetchone()[0]
+        )
+
+    @staticmethod
+    def _max_stock_daily_rowid(conn: sqlite3.Connection) -> int:
+        return int(conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM stock_daily").fetchone()[0])
+
+    def _health_snapshot(self, *, exact_daily_rows: bool) -> dict[str, object]:
         with self.connect() as conn:
             active_symbols = int(
                 conn.execute("SELECT COUNT(*) FROM stock_basic WHERE COALESCE(is_listed, 1) = 1").fetchone()[0]
             )
-            covered_symbols = int(
-                conn.execute(
+            covered_symbols = self._active_symbol_count(conn)
+            current_max_rowid = self._max_stock_daily_rowid(conn)
+            daily_rows_updated_at: str | None = None
+            if exact_daily_rows:
+                daily_rows = int(conn.execute("SELECT COUNT(*) FROM stock_daily").fetchone()[0])
+                daily_rows_exact = True
+                daily_rows_source = "exact_count"
+                daily_rows_updated_at = datetime.now().isoformat(timespec="seconds")
+                conn.executemany(
                     """
-                    SELECT COUNT(DISTINCT d.code)
-                    FROM stock_daily d
-                    JOIN stock_basic b ON b.code = d.code
-                    WHERE COALESCE(b.is_listed, 1) = 1
-                    """
-                ).fetchone()[0]
-            )
-            daily_rows = int(conn.execute("SELECT COUNT(*) FROM stock_daily").fetchone()[0])
+                    INSERT INTO run_metadata (key, value)
+                    VALUES (?, ?)
+                    ON CONFLICT (key) DO UPDATE SET value = excluded.value
+                    """,
+                    [
+                        (STOCK_DAILY_ROWS_KEY, str(daily_rows)),
+                        (STOCK_DAILY_MAX_ROWID_KEY, str(current_max_rowid)),
+                        (STOCK_DAILY_ROWS_UPDATED_AT_KEY, daily_rows_updated_at),
+                    ],
+                )
+            else:
+                metadata = self._metadata_values(conn, STOCK_DAILY_HEALTH_KEYS)
+                try:
+                    cached_rows = int(metadata[STOCK_DAILY_ROWS_KEY])
+                    cached_max_rowid = int(metadata[STOCK_DAILY_MAX_ROWID_KEY])
+                except (KeyError, TypeError, ValueError):
+                    cached_rows = -1
+                    cached_max_rowid = -1
+                if cached_rows >= 0 and cached_max_rowid == current_max_rowid:
+                    daily_rows = cached_rows
+                    daily_rows_exact = True
+                    daily_rows_source = "metadata"
+                    daily_rows_updated_at = metadata.get(STOCK_DAILY_ROWS_UPDATED_AT_KEY)
+                else:
+                    # MAX(rowid) is O(1) and is a useful display fallback, but it can
+                    # over-count after deletions. It is never used for initialization
+                    # validation and is explicitly labelled as an estimate.
+                    daily_rows = current_max_rowid
+                    daily_rows_exact = current_max_rowid == 0
+                    daily_rows_source = "empty_table" if daily_rows_exact else "max_rowid_estimate"
             index_symbols = int(conn.execute("SELECT COUNT(DISTINCT index_code) FROM index_daily").fetchone()[0])
             latest_trade_date = conn.execute("SELECT MAX(trade_date) FROM stock_daily").fetchone()[0]
             latest_symbol_count = 0
             if latest_trade_date:
-                latest_symbol_count = int(
-                    conn.execute(
-                        "SELECT COUNT(DISTINCT code) FROM stock_daily WHERE trade_date = ?",
-                        (latest_trade_date,),
-                    ).fetchone()[0]
-                )
+                latest_symbol_count = self._active_symbol_count(conn, str(latest_trade_date))
         coverage = covered_symbols / active_symbols if active_symbols else 0.0
         latest_coverage = latest_symbol_count / active_symbols if active_symbols else 0.0
         return {
@@ -272,11 +358,22 @@ class Database:
             "covered_symbols": covered_symbols,
             "stock_coverage": coverage,
             "daily_rows": daily_rows,
+            "daily_rows_exact": daily_rows_exact,
+            "daily_rows_source": daily_rows_source,
+            "daily_rows_updated_at": daily_rows_updated_at,
             "index_symbols": index_symbols,
             "latest_trade_date": latest_trade_date,
             "latest_symbol_count": latest_symbol_count,
             "latest_stock_coverage": latest_coverage,
         }
+
+    def data_health(self) -> dict[str, object]:
+        """Return validation-grade health data and refresh the row-count metadata."""
+        return self._health_snapshot(exact_daily_rows=True)
+
+    def quick_data_health(self) -> dict[str, object]:
+        """Return panel health without scanning every row in ``stock_daily``."""
+        return self._health_snapshot(exact_daily_rows=False)
 
     def save_selections(self, report_date: str, ranked: pd.DataFrame, top_n: int = 50) -> int:
         selected = ranked.head(top_n).copy()

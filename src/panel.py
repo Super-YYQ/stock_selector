@@ -201,7 +201,7 @@ def health() -> dict[str, str | int]:
 def status() -> dict[str, Any]:
     config = _config()
     db = _database()
-    health = db.data_health()
+    health = db.quick_data_health()
     runs = _records(db.recent_runs(20))
     report_dir = ROOT / config.report.output_dir
     reports = []

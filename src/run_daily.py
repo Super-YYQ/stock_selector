@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import logging
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import pandas as pd
@@ -25,6 +26,7 @@ from src.fetch_data import (
 from src.market_score import calculate_market_score
 from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
+from src.run_lock import coordinated_run_lock
 from src.scoring import build_ranked_results
 from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
 from src.strategies.registry import (
@@ -38,6 +40,15 @@ from src.web_report import build_report_payload, write_static_report
 
 INDEX_CODES = ("sh000001", "sz399001", "sz399006")
 POST_MARKET_CUTOFF_MINUTES = 15 * 60 + 10
+MARKET_DATA_AVAILABLE_MINUTES = 9 * 60 + 35
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+RUN_LOCK_PATH = PROJECT_ROOT / "data" / "run_daily.lock"
+
+
+@dataclass(frozen=True)
+class MarketSessionProbe:
+    state: Literal["trading", "closed", "unknown"]
+    message: str
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -208,6 +219,195 @@ def _open_configured_fetcher(fetcher: Any | None, config: AppConfig, external_fe
     finally:
         active_context.__exit__(None, None, None)
 
+
+def probe_market_session(
+    config: AppConfig,
+    target_date: str,
+    *,
+    now: datetime | None = None,
+    fetcher: Any | None = None,
+) -> MarketSessionProbe:
+    """Distinguish an exchange closure from unavailable market data.
+
+    Weekends are known locally. On weekdays after the market has opened, three
+    successful index queries with no current-day bar are treated as a closure.
+    Provider errors remain unknown so the later freshness validation fails
+    closed instead of silently reusing an older report date.
+    """
+
+    target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    if target.weekday() >= 5:
+        return MarketSessionProbe("closed", f"{target_date} 为周末")
+
+    current = now or datetime.now()
+    current_minutes = current.hour * 60 + current.minute
+    if target == current.date() and current_minutes < MARKET_DATA_AVAILABLE_MINUTES:
+        return MarketSessionProbe("unknown", "开盘前无法根据当日日线确认是否交易")
+
+    fresh_indexes: set[str] = set()
+    successful_queries = 0
+    errors: list[str] = []
+    external_fetcher = fetcher is not None
+    try:
+        with _open_configured_fetcher(fetcher, config, external_fetcher) as (active_fetcher, _parallel_backend):
+            for index_code in INDEX_CODES:
+                try:
+                    frame = active_fetcher.fetch_index_daily(
+                        index_code,
+                        start_date=target_date,
+                        end_date=target_date,
+                    )
+                    successful_queries += 1
+                    if (
+                        not frame.empty
+                        and "trade_date" in frame.columns
+                        and frame["trade_date"].astype(str).eq(target_date).any()
+                    ):
+                        fresh_indexes.add(index_code)
+                except Exception as exc:
+                    errors.append(f"{index_code}: {exc}")
+    except Exception as exc:
+        return MarketSessionProbe("unknown", f"交易日探测连接失败：{exc}")
+
+    if fresh_indexes:
+        return MarketSessionProbe(
+            "trading",
+            f"已从 {len(fresh_indexes)} 个主要指数确认 {target_date} 为交易日",
+        )
+    if successful_queries == len(INDEX_CODES) and not errors:
+        return MarketSessionProbe(
+            "closed",
+            f"三大指数均成功返回且无 {target_date} 行情，判定为休市",
+        )
+    detail = "；".join(errors)[:500] if errors else "主要指数响应不完整"
+    return MarketSessionProbe("unknown", f"无法确认交易日状态：{detail}")
+
+
+def validate_expected_market_data(
+    db: Database,
+    expected_date: str,
+    minimum_coverage: float,
+    update_counts: dict[str, int] | None = None,
+) -> dict[str, object]:
+    """Require complete current-session data before an online report is built."""
+
+    target = datetime.strptime(expected_date, "%Y-%m-%d").date()
+    with db.connect() as conn:
+        if target < date.today():
+            expected_rows = conn.execute(
+                """
+                WITH normalized AS (
+                    SELECT
+                        b.code,
+                        REPLACE(REPLACE(REPLACE(TRIM(COALESCE(b.list_date, '')), '-', ''), '/', ''), '.', '')
+                            AS list_date_key
+                    FROM stock_basic b
+                    WHERE COALESCE(b.is_listed, 1) = 1
+                )
+                SELECT n.code
+                FROM normalized n
+                WHERE (
+                    LENGTH(n.list_date_key) = 8
+                    AND n.list_date_key NOT GLOB '*[^0-9]*'
+                    AND n.list_date_key <= ?
+                )
+                OR (
+                    EXISTS (
+                        SELECT 1
+                        FROM stock_daily d
+                        WHERE d.code = n.code
+                          AND d.trade_date <= ?
+                    )
+                )
+                """,
+                (target.strftime("%Y%m%d"), expected_date),
+            ).fetchall()
+        else:
+            expected_rows = conn.execute(
+                """
+                SELECT code
+                FROM stock_basic
+                WHERE COALESCE(is_listed, 1) = 1
+                """,
+            ).fetchall()
+        expected_codes = {str(row[0]) for row in expected_rows}
+        active_symbols = len(expected_codes)
+        current_rows = conn.execute(
+            "SELECT DISTINCT code FROM stock_daily WHERE trade_date = ?",
+            (expected_date,),
+        ).fetchall()
+        current_codes = {str(row[0]) for row in current_rows}
+        current_symbols = len(expected_codes & current_codes)
+        rows = conn.execute(
+            """
+            SELECT DISTINCT index_code
+            FROM index_daily
+            WHERE trade_date = ?
+              AND index_code IN (?, ?, ?)
+            """,
+            (expected_date, *INDEX_CODES),
+        ).fetchall()
+    stored_indexes = {str(row[0]) for row in rows}
+    stored_coverage = current_symbols / active_symbols if active_symbols else 0.0
+    problems: list[str] = []
+
+    if active_symbols < 1:
+        problems.append("股票基础信息为空")
+    if stored_coverage < minimum_coverage:
+        problems.append(
+            f"数据库当日股票覆盖率 {stored_coverage:.1%} 低于要求 {minimum_coverage:.1%}"
+        )
+    missing_stored_indexes = sorted(set(INDEX_CODES) - stored_indexes)
+    if missing_stored_indexes:
+        problems.append(f"数据库缺少当日指数：{', '.join(missing_stored_indexes)}")
+
+    refreshed_symbols: int | None = None
+    refreshed_indexes: int | None = None
+    if update_counts is not None:
+        refreshed_symbols = int(update_counts.get("fresh_stock_symbols", 0))
+        refreshed_indexes = int(update_counts.get("fresh_index_symbols", 0))
+        refreshed_coverage = refreshed_symbols / active_symbols if active_symbols else 0.0
+        if refreshed_coverage < minimum_coverage:
+            problems.append(
+                f"本次抓取当日股票覆盖率 {refreshed_coverage:.1%} 低于要求 {minimum_coverage:.1%}"
+            )
+        if refreshed_indexes < len(INDEX_CODES):
+            problems.append(
+                f"本次抓取仅更新 {refreshed_indexes}/{len(INDEX_CODES)} 个主要指数"
+            )
+
+    if problems:
+        raise RuntimeError(
+            f"{expected_date} 当日行情校验失败，已阻止使用旧数据生成报告："
+            + "；".join(problems)
+        )
+    return {
+        "expected_date": expected_date,
+        "active_symbols": active_symbols,
+        "current_symbols": current_symbols,
+        "stock_coverage": stored_coverage,
+        "index_codes": sorted(stored_indexes),
+        "refreshed_symbols": refreshed_symbols,
+        "refreshed_indexes": refreshed_indexes,
+    }
+
+
+def _is_automatic_online_run(args: argparse.Namespace) -> bool:
+    return not args.init and not args.offline and args.date is None
+
+
+def _requires_current_market_data(args: argparse.Namespace, target_date: str) -> bool:
+    return (
+        not args.init
+        and not args.offline
+        and target_date == date.today().isoformat()
+    )
+
+
+def _requires_requested_market_data(args: argparse.Namespace) -> bool:
+    return args.date is not None
+
+
 def validate_initialization(db: Database, config: AppConfig) -> dict[str, object]:
     health = db.data_health()
     problems: list[str] = []
@@ -264,7 +464,17 @@ def update_market_data(
 ) -> dict[str, int]:
     logger = logging.getLogger(__name__)
     external_fetcher = fetcher is not None
-    counts = {"stock_basic": 0, "stock_daily": 0, "index_daily": 0, "sector_daily": 0, "failed_symbols": 0}
+    counts = {
+        "stock_basic": 0,
+        "stock_daily": 0,
+        "index_daily": 0,
+        "sector_daily": 0,
+        "failed_symbols": 0,
+        "fresh_stock_symbols": 0,
+        "fresh_index_symbols": 0,
+    }
+    fresh_stock_codes: set[str] = set()
+    fresh_index_codes: set[str] = set()
 
     with _open_configured_fetcher(fetcher, config, external_fetcher) as (active_fetcher, parallel_backend):
         if init:
@@ -372,6 +582,10 @@ def update_market_data(
             if daily.empty:
                 return
             counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
+            if "trade_date" in daily.columns and "code" in daily.columns:
+                fresh = daily[daily["trade_date"].astype(str).eq(report_date)]
+                fresh_stock_codes.update(fresh["code"].dropna().astype(str).str.zfill(6))
+                counts["fresh_stock_symbols"] = len(fresh_stock_codes)
             record_tdx_sync(daily)
 
         def retry_stock_tasks_sequentially(tasks: list[tuple[str, str, str]], reason: str) -> None:
@@ -482,6 +696,12 @@ def update_market_data(
                 if index_daily.empty:
                     raise RuntimeError("data provider returned no index rows")
                 counts["index_daily"] += db.upsert_dataframe("index_daily", index_daily, ["index_code", "trade_date"])
+                if (
+                    "trade_date" in index_daily.columns
+                    and index_daily["trade_date"].astype(str).eq(report_date).any()
+                ):
+                    fresh_index_codes.add(index_code)
+                    counts["fresh_index_symbols"] = len(fresh_index_codes)
             except Exception as exc:
                 logger.warning("[%s] 指数数据更新失败: %s", index_code, exc)
 
@@ -497,8 +717,7 @@ def update_market_data(
     logger.info("数据更新完成: %s", counts)
     return counts
 
-def run(argv: list[str] | None = None) -> Path | None:
-    args = parse_args(argv)
+def _run_with_args(args: argparse.Namespace) -> Path | None:
     preliminary_date = args.date or date.today().strftime("%Y-%m-%d")
     snapshot_type = "close" if args.init else resolve_snapshot_type(args.snapshot, preliminary_date)
     setup_logging(preliminary_date)
@@ -518,20 +737,34 @@ def run(argv: list[str] | None = None) -> Path | None:
         db.start_run(run_id, run_mode, preliminary_date)
         run_started = True
 
+        if _is_automatic_online_run(args):
+            session = probe_market_session(config, preliminary_date)
+            if session.state == "closed":
+                message = f"{session.message}，自动任务已跳过，未更新行情或生成报告。"
+                logger.info(message)
+                db.finish_run(run_id, "skipped", report_date=preliminary_date, message=message)
+                print(message)
+                return None
+            if session.state == "unknown":
+                logger.warning("%s；继续尝试更新，随后将执行严格的当日行情校验", session.message)
+            else:
+                logger.info(session.message)
+
         existing_basic = _safe_read(
             db,
             "stock_basic",
             ["code", "name", "industry", "list_date", "is_st", "is_listed"],
         )
+        update_counts: dict[str, int] | None = None
         if args.init:
             logger.info("初始化模式已启动，开始更新免费数据源")
-            update_market_data(db, config, preliminary_date, init=True)
+            update_counts = update_market_data(db, config, preliminary_date, init=True)
             validate_initialization(db, config)
         elif args.offline:
             logger.info("离线重算模式已启动，跳过行情更新并使用现有本地数据")
         elif not existing_basic.empty:
             logger.info("开始执行%s数据更新", "盘中快照" if snapshot_type == "intraday" else "每日增量")
-            update_market_data(
+            update_counts = update_market_data(
                 db,
                 config,
                 preliminary_date,
@@ -544,16 +777,41 @@ def run(argv: list[str] | None = None) -> Path | None:
             "stock_basic",
             ["code", "name", "industry", "list_date", "is_st", "is_listed"],
         )
-        health = db.data_health()
+        requires_fresh_update = _requires_current_market_data(args, preliminary_date)
+        requires_target_date = (
+            requires_fresh_update or _requires_requested_market_data(args)
+        )
+        if requires_target_date:
+            freshness = validate_expected_market_data(
+                db,
+                preliminary_date,
+                config.data.min_latest_stock_coverage,
+                (update_counts or {}) if requires_fresh_update else None,
+            )
+            logger.info(
+                "%s 行情校验通过：股票 %s/%s（%.1f%%），指数 %s/%s",
+                preliminary_date,
+                freshness["current_symbols"],
+                freshness["active_symbols"],
+                float(freshness["stock_coverage"]) * 100,
+                len(freshness["index_codes"]),
+                len(INDEX_CODES),
+            )
+
+        health = db.quick_data_health()
         latest_trade_date = health.get("latest_trade_date")
-        report_date = resolve_report_date(args.date, str(latest_trade_date) if latest_trade_date else None)
+        report_date = (
+            preliminary_date
+            if requires_target_date
+            else resolve_report_date(args.date, str(latest_trade_date) if latest_trade_date else None)
+        )
         final_report_date = report_date
         if snapshot_type == "intraday" and report_date != preliminary_date:
             message = f"当前日期 {preliminary_date} 尚无盘中日线，已跳过快照，最新交易日为 {report_date}"
             logger.info(message)
             db.finish_run(run_id, "skipped", report_date=report_date, message=message)
             return None
-        if not args.offline and report_date == preliminary_date:
+        if not args.offline and report_date == preliminary_date and not requires_target_date:
             validate_latest_coverage(health, config.data.min_latest_stock_coverage)
         analysis_start = (
             datetime.strptime(report_date, "%Y-%m-%d").date()
@@ -646,7 +904,7 @@ def run(argv: list[str] | None = None) -> Path | None:
         else:
             logger.info("盘中快照不写入正式入选与未来收益历史")
         performance = db.strategy_performance()
-        health = db.data_health()
+        health = db.quick_data_health()
 
         report_path = write_excel_report(
             config.report.output_dir,
@@ -718,6 +976,12 @@ def run(argv: list[str] | None = None) -> Path | None:
                 logger.exception("任务状态写入失败")
         logger.exception("每日任务执行失败")
         raise
+
+
+def run(argv: list[str] | None = None) -> Path | None:
+    args = parse_args(argv)
+    with coordinated_run_lock(RUN_LOCK_PATH):
+        return _run_with_args(args)
 
 
 if __name__ == "__main__":
