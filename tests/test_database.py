@@ -26,6 +26,18 @@ def test_database_creates_core_tables(tmp_path: Path) -> None:
     } <= tables
 
 
+def test_database_enables_wal_and_busy_timeout(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+
+    with db.connect() as conn:
+        journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        busy_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+
+    assert journal_mode == "wal"
+    assert busy_timeout == 5_000
+
+
 def test_upsert_stock_daily_replaces_same_code_and_date(tmp_path: Path) -> None:
     db = Database(tmp_path / "stock.db")
     db.initialize()
@@ -55,6 +67,89 @@ def test_upsert_stock_daily_replaces_same_code_and_date(tmp_path: Path) -> None:
     assert len(stored) == 1
     assert stored.loc[0, "close"] == 10.8
     assert stored.loc[0, "amount"] == 108000
+
+
+def test_quick_data_health_avoids_full_row_count_and_uses_active_symbol_exists(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    db.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"code": "000001", "name": "A", "is_listed": 1},
+                {"code": "000002", "name": "B", "is_listed": 1},
+                {"code": "000003", "name": "C", "is_listed": 0},
+            ]
+        ),
+        ["code"],
+    )
+    db.upsert_dataframe(
+        "stock_daily",
+        pd.DataFrame(
+            [
+                {"code": "000001", "trade_date": "2026-06-22", "close": 10},
+                {"code": "000003", "trade_date": "2026-06-22", "close": 20},
+            ]
+        ),
+        ["code", "trade_date"],
+    )
+
+    statements: list[str] = []
+    traced_connection = db.connect()
+    traced_connection.set_trace_callback(statements.append)
+    monkeypatch.setattr(db, "connect", lambda: traced_connection)
+    health = db.quick_data_health()
+    traced_connection.close()
+
+    normalized = [" ".join(statement.upper().split()) for statement in statements]
+    assert "SELECT COUNT(*) FROM STOCK_DAILY" not in normalized
+    assert health["active_symbols"] == 2
+    assert health["covered_symbols"] == 1
+    assert health["stock_coverage"] == 0.5
+    assert health["latest_symbol_count"] == 1
+    assert health["latest_stock_coverage"] == 0.5
+    assert health["daily_rows"] == 2
+    assert health["daily_rows_exact"] is False
+    assert health["daily_rows_source"] == "max_rowid_estimate"
+
+
+def test_exact_data_health_populates_quick_row_count_metadata(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    db.upsert_dataframe(
+        "stock_daily",
+        pd.DataFrame(
+            [{"code": "000001", "trade_date": "2026-06-22", "close": 10}]
+        ),
+        ["code", "trade_date"],
+    )
+
+    exact = db.data_health()
+    quick = db.quick_data_health()
+
+    assert exact["daily_rows"] == 1
+    assert exact["daily_rows_exact"] is True
+    assert exact["daily_rows_source"] == "exact_count"
+    assert quick["daily_rows"] == 1
+    assert quick["daily_rows_exact"] is True
+    assert quick["daily_rows_source"] == "metadata"
+    assert quick["daily_rows_updated_at"] == exact["daily_rows_updated_at"]
+
+    db.upsert_dataframe(
+        "stock_daily",
+        pd.DataFrame(
+            [{"code": "000002", "trade_date": "2026-06-22", "close": 20}]
+        ),
+        ["code", "trade_date"],
+    )
+    invalidated = db.quick_data_health()
+
+    assert invalidated["daily_rows"] == 2
+    assert invalidated["daily_rows_exact"] is False
+    assert invalidated["daily_rows_source"] == "max_rowid_estimate"
 
 
 def test_mark_all_stocks_unlisted_allows_fresh_basic_list_to_reactivate(tmp_path: Path) -> None:

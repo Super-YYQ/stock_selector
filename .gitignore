@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 data/*.db
 data/panel.pid
+data/*.lock
+data/*.lock.recovery
 data/raw/
 data/processed/
 logs/

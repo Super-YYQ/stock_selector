@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from src.atomic_io import atomic_copy, atomic_write_text
 
 
 def _records(frame: pd.DataFrame | None, limit: int | None = None) -> list[dict[str, Any]]:
@@ -106,17 +107,17 @@ def write_static_report(
     for name in ("index.html", "404.html"):
         source = template / name
         if source.exists():
-            shutil.copy2(source, site / name)
+            atomic_copy(source, site / name)
     source_assets = template / "assets"
     if source_assets.exists():
         for source in source_assets.iterdir():
             if source.is_file():
-                shutil.copy2(source, assets_dir / source.name)
+                atomic_copy(source, assets_dir / source.name)
 
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
-    (data_dir / "latest.json").write_text(serialized, encoding="utf-8")
+    atomic_write_text(data_dir / "latest.json", serialized)
     report_date = str(payload["report_date"])
-    (history_dir / f"{report_date}.json").write_text(serialized, encoding="utf-8")
+    atomic_write_text(history_dir / f"{report_date}.json", serialized)
 
     history_files = sorted(history_dir.glob("*.json"), reverse=True)
     for stale in history_files[max(1, history_days):]:
@@ -126,8 +127,5 @@ def write_static_report(
         {"report_date": item.stem, "path": f"data/history/{item.name}"}
         for item in sorted(history_dir.glob("*.json"), reverse=True)
     ]
-    (data_dir / "history.json").write_text(
-        json.dumps(history, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_text(data_dir / "history.json", json.dumps(history, ensure_ascii=False, indent=2))
     return site / "index.html"

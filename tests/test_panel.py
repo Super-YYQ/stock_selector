@@ -3,6 +3,8 @@ import sys
 import time
 from pathlib import Path
 
+import pandas as pd
+
 import src.panel as panel
 
 
@@ -122,6 +124,33 @@ def test_panel_health_and_existing_instance_detection(monkeypatch) -> None:
     assert health["status"] == "ok"
     assert health["pid"] > 0
     assert panel._panel_is_running(8765) is True
+
+
+def test_status_uses_quick_database_health(tmp_path: Path, monkeypatch) -> None:
+    _project(tmp_path)
+
+    class FakeDatabase:
+        def quick_data_health(self):
+            return {
+                "daily_rows": 123,
+                "daily_rows_exact": False,
+                "daily_rows_source": "max_rowid_estimate",
+            }
+
+        def data_health(self):
+            raise AssertionError("status must not run validation-grade health scans")
+
+        def recent_runs(self, limit):
+            assert limit == 20
+            return pd.DataFrame()
+
+    monkeypatch.setattr(panel, "ROOT", tmp_path)
+    monkeypatch.setattr(panel, "_database", lambda: FakeDatabase())
+
+    status = panel.status()
+
+    assert status["health"]["daily_rows"] == 123
+    assert status["health"]["daily_rows_exact"] is False
 
 
 def test_existing_legacy_panel_is_detected(monkeypatch) -> None:

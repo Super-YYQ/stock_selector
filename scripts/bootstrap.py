@@ -9,8 +9,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.run_lock import RUN_LOCK_TOKEN_ENV, SingleInstanceRunLock
+
+
 VENV = ROOT / ".venv"
 REQUIREMENTS = ROOT / "requirements.txt"
+RUN_LOCK_PATH = ROOT / "data" / "run_daily.lock"
 
 
 def venv_python() -> Path:
@@ -47,8 +54,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
+def _execute(args: argparse.Namespace, child_env: dict[str, str] | None = None) -> int:
     python = ensure_environment()
     if args.command == "panel":
         command = [str(python), "-m", "src.panel"]
@@ -64,10 +70,25 @@ def main() -> int:
             command.extend(["--date", args.date])
         command.extend(["--snapshot", args.snapshot])
 
-    result = subprocess.run(command, cwd=ROOT)
+    result = subprocess.run(command, cwd=ROOT, env=child_env)
     if result.returncode == 0 and args.publish and args.command in {"daily", "init"}:
-        result = subprocess.run([str(python), str(ROOT / "scripts" / "publish_pages.py")], cwd=ROOT)
+        result = subprocess.run(
+            [str(python), str(ROOT / "scripts" / "publish_pages.py")],
+            cwd=ROOT,
+            env=child_env,
+        )
     return result.returncode
+
+
+def main() -> int:
+    args = parse_args()
+    if args.command not in {"daily", "init", "publish"}:
+        return _execute(args)
+
+    with SingleInstanceRunLock(RUN_LOCK_PATH) as lock:
+        child_env = os.environ.copy()
+        child_env[RUN_LOCK_TOKEN_ENV] = lock.token
+        return _execute(args, child_env)
 
 
 if __name__ == "__main__":

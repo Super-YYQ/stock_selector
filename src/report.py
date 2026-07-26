@@ -8,6 +8,8 @@ from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from src.atomic_io import atomic_output_path
+
 
 COLORS = {
     "ink": "173332",
@@ -356,30 +358,31 @@ def write_excel_report(
     path = output / f"{report_date}_{suffix}.xlsx"
     performance = strategy_performance if strategy_performance is not None else pd.DataFrame()
     custom_results = custom_strategy_results if custom_strategy_results is not None else pd.DataFrame()
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        _write_market_sheet(writer, report_date, market, health or {}, snapshot_type)
-        _rename_existing(strong_sectors, SECTOR_COLUMNS).head(30).to_excel(writer, sheet_name="强势板块", index=False)
-        _rename_existing(top50, TOP50_COLUMNS).to_excel(writer, sheet_name="Top50观察名单", index=False)
-        _rename_existing(top10, TOP10_COLUMNS).to_excel(writer, sheet_name="Top10重点关注", index=False)
-        _rename_existing(top50, DETAIL_COLUMNS).to_excel(writer, sheet_name="个股说明", index=False)
-        _rename_existing(performance, PERFORMANCE_COLUMNS).to_excel(writer, sheet_name="策略表现", index=False)
-        _rename_existing(custom_results, CUSTOM_FORMULA_COLUMNS).to_excel(writer, sheet_name="自定义策略", index=False)
-        _rename_existing(filtered, FILTER_COLUMNS).to_excel(writer, sheet_name="风险过滤名单", index=False)
-        ranked.to_excel(writer, sheet_name="原始评分明细", index=False)
+    with atomic_output_path(path, suffix=".xlsx") as temporary:
+        with pd.ExcelWriter(temporary, engine="openpyxl") as writer:
+            _write_market_sheet(writer, report_date, market, health or {}, snapshot_type)
+            _rename_existing(strong_sectors, SECTOR_COLUMNS).head(30).to_excel(writer, sheet_name="强势板块", index=False)
+            _rename_existing(top50, TOP50_COLUMNS).to_excel(writer, sheet_name="Top50观察名单", index=False)
+            _rename_existing(top10, TOP10_COLUMNS).to_excel(writer, sheet_name="Top10重点关注", index=False)
+            _rename_existing(top50, DETAIL_COLUMNS).to_excel(writer, sheet_name="个股说明", index=False)
+            _rename_existing(performance, PERFORMANCE_COLUMNS).to_excel(writer, sheet_name="策略表现", index=False)
+            _rename_existing(custom_results, CUSTOM_FORMULA_COLUMNS).to_excel(writer, sheet_name="自定义策略", index=False)
+            _rename_existing(filtered, FILTER_COLUMNS).to_excel(writer, sheet_name="风险过滤名单", index=False)
+            ranked.to_excel(writer, sheet_name="原始评分明细", index=False)
 
-        for name in ["强势板块", "Top50观察名单", "Top10重点关注", "个股说明", "策略表现", "自定义策略", "风险过滤名单", "原始评分明细"]:
-            _style_data_sheet(writer.sheets[name])
-        tab_colors = {
-            "市场环境": COLORS["header"],
-            "强势板块": COLORS["gold"],
-            "Top50观察名单": COLORS["green"],
-            "Top10重点关注": COLORS["accent"],
-            "个股说明": COLORS["muted"],
-            "自定义策略": COLORS["header"],
-            "风险过滤名单": COLORS["red"],
-        }
-        for name, color in tab_colors.items():
-            writer.sheets[name].sheet_properties.tabColor = color
-        writer.sheets["原始评分明细"].sheet_state = "hidden"
-        writer.book.active = writer.book.sheetnames.index("市场环境")
+            for name in ["强势板块", "Top50观察名单", "Top10重点关注", "个股说明", "策略表现", "自定义策略", "风险过滤名单", "原始评分明细"]:
+                _style_data_sheet(writer.sheets[name])
+            tab_colors = {
+                "市场环境": COLORS["header"],
+                "强势板块": COLORS["gold"],
+                "Top50观察名单": COLORS["green"],
+                "Top10重点关注": COLORS["accent"],
+                "个股说明": COLORS["muted"],
+                "自定义策略": COLORS["header"],
+                "风险过滤名单": COLORS["red"],
+            }
+            for name, color in tab_colors.items():
+                writer.sheets[name].sheet_properties.tabColor = color
+            writer.sheets["原始评分明细"].sheet_state = "hidden"
+            writer.book.active = writer.book.sheetnames.index("市场环境")
     return path
