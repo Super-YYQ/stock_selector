@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from src.indicators import is_limit_up
 
 def market_board(code: str) -> str:
     normalized = str(code).zfill(6)
@@ -71,11 +72,27 @@ def calculate_sector_scores(
     latest_stocks = stock_daily[stock_daily["trade_date"] == report_date].merge(
         stock_basic[["code", "industry"]], on="code", how="left"
     )
+    st_codes: set[str] = set()
+    if "is_st" in stock_basic.columns:
+        st_codes = set(
+            stock_basic.loc[
+                pd.to_numeric(stock_basic["is_st"], errors="coerce").fillna(0).eq(1),
+                "code",
+            ].astype(str)
+        )
+    latest_stocks["is_limit_up"] = latest_stocks.apply(
+        lambda row: is_limit_up(
+            str(row["code"]),
+            float(row["pct_chg"]),
+            str(row["code"]) in st_codes,
+        ),
+        axis=1,
+    )
     strong_counts = (
         latest_stocks[latest_stocks["pct_chg"] >= 5].groupby("industry")["code"].count().reset_index(name="strong_stock_count")
     )
     limit_counts = (
-        latest_stocks[latest_stocks["pct_chg"] >= 9.5].groupby("industry")["code"].count().reset_index(name="limit_up_count")
+        latest_stocks[latest_stocks["is_limit_up"]].groupby("industry")["code"].count().reset_index(name="limit_up_count")
     )
     latest = latest.merge(strong_counts, left_on="sector_name", right_on="industry", how="left").drop(
         columns=["industry"], errors="ignore"

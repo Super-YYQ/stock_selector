@@ -37,6 +37,7 @@ from src.volume_price_score import calculate_volume_price_scores
 from src.web_report import build_report_payload, write_static_report
 
 INDEX_CODES = ("sh000001", "sz399001", "sz399006")
+POST_MARKET_CUTOFF_MINUTES = 15 * 60 + 10
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -44,6 +45,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--init", action="store_true", help="初始化并回填历史数据")
     parser.add_argument("--date", help="指定报告日期，格式 YYYY-MM-DD")
     parser.add_argument("--offline", action="store_true", help="仅使用本地数据库重算策略和报告，不连接行情源")
+    parser.add_argument(
+        "--snapshot",
+        choices=("auto", "intraday", "close"),
+        default="auto",
+        help="报告阶段：自动判断、盘中快照或盘后正式报告",
+    )
     return parser.parse_args(argv)
 
 
@@ -67,6 +74,20 @@ def resolve_report_date(requested_date: str | None, latest_trade_date: str | Non
     if requested_date:
         return requested_date
     return latest_trade_date or date.today().strftime("%Y-%m-%d")
+
+
+def resolve_snapshot_type(
+    requested: str,
+    report_date: str,
+    now: datetime | None = None,
+) -> str:
+    if requested in {"intraday", "close"}:
+        return requested
+    current = now or datetime.now()
+    if report_date != current.date().isoformat():
+        return "close"
+    current_minutes = current.hour * 60 + current.minute
+    return "intraday" if current_minutes < POST_MARKET_CUTOFF_MINUTES else "close"
 
 
 def _empty_if_missing(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -111,9 +132,15 @@ def _latest_dates(df: pd.DataFrame, key_column: str, date_column: str = "trade_d
     return latest.groupby(key_column)[date_column].max().to_dict()
 
 
-def _next_fetch_start(latest_date: str | None, fallback_start: str) -> str:
+def _next_fetch_start(
+    latest_date: str | None,
+    fallback_start: str,
+    refresh_date: str | None = None,
+) -> str:
     if not latest_date:
         return fallback_start
+    if refresh_date is not None and str(latest_date) == refresh_date:
+        return refresh_date
     parsed = datetime.strptime(str(latest_date), "%Y-%m-%d").date()
     return (parsed + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -212,12 +239,28 @@ def validate_initialization(db: Database, config: AppConfig) -> dict[str, object
     return health
 
 
+def validate_latest_coverage(health: dict[str, object], minimum: float) -> None:
+    coverage = float(health.get("latest_stock_coverage", 0) or 0)
+    if coverage < minimum:
+        raise RuntimeError(
+            f"latest trading-day stock coverage {coverage:.1%} is below {minimum:.1%}"
+        )
+
+
+def summarize_run_error(error: object) -> str:
+    message = str(error)
+    if "all configured TDX hosts failed" in message:
+        return "TDX 行情服务器暂时无法连接（已尝试全部节点），本次未更新数据，请稍后重试。"
+    return message[:2000]
+
+
 def update_market_data(
     db: Database,
     config: AppConfig,
     report_date: str,
     init: bool = False,
     fetcher: Any | None = None,
+    refresh_latest: bool = False,
 ) -> dict[str, int]:
     logger = logging.getLogger(__name__)
     external_fetcher = fetcher is not None
@@ -282,7 +325,11 @@ def update_market_data(
             if tdx_managed and init and code not in synced_codes:
                 fetch_start = config.data.start_date
             else:
-                fetch_start = _next_fetch_start(latest_stock_dates.get(code), config.data.start_date)
+                fetch_start = _next_fetch_start(
+                    latest_stock_dates.get(code),
+                    config.data.start_date,
+                    report_date if refresh_latest else None,
+                )
             if not _should_fetch(fetch_start, report_date):
                 skipped_symbols += 1
                 continue
@@ -421,7 +468,11 @@ def update_market_data(
             logger.info("skipped %s symbols already updated to %s", skipped_symbols, report_date)
 
         for index_code in INDEX_CODES:
-            fetch_start = _next_fetch_start(latest_index_dates.get(index_code), config.data.start_date)
+            fetch_start = _next_fetch_start(
+                latest_index_dates.get(index_code),
+                config.data.start_date,
+                report_date if refresh_latest else None,
+            )
             if not _should_fetch(fetch_start, report_date):
                 logger.info("指数日线已是最新，跳过: %s", index_code)
                 continue
@@ -449,6 +500,7 @@ def update_market_data(
 def run(argv: list[str] | None = None) -> Path | None:
     args = parse_args(argv)
     preliminary_date = args.date or date.today().strftime("%Y-%m-%d")
+    snapshot_type = "close" if args.init else resolve_snapshot_type(args.snapshot, preliminary_date)
     setup_logging(preliminary_date)
     logger = logging.getLogger(__name__)
     run_id = uuid4().hex
@@ -462,7 +514,8 @@ def run(argv: list[str] | None = None) -> Path | None:
         config = load_config()
         db = Database(config.data.database)
         db.initialize()
-        db.start_run(run_id, "init" if args.init else "daily", preliminary_date)
+        run_mode = "init" if args.init else ("intraday" if snapshot_type == "intraday" else "daily")
+        db.start_run(run_id, run_mode, preliminary_date)
         run_started = True
 
         existing_basic = _safe_read(
@@ -477,8 +530,14 @@ def run(argv: list[str] | None = None) -> Path | None:
         elif args.offline:
             logger.info("离线重算模式已启动，跳过行情更新并使用现有本地数据")
         elif not existing_basic.empty:
-            logger.info("开始执行每日增量数据更新")
-            update_market_data(db, config, preliminary_date, init=False)
+            logger.info("开始执行%s数据更新", "盘中快照" if snapshot_type == "intraday" else "每日增量")
+            update_market_data(
+                db,
+                config,
+                preliminary_date,
+                init=False,
+                refresh_latest=preliminary_date == date.today().isoformat(),
+            )
 
         stock_basic = _safe_read(
             db,
@@ -489,6 +548,13 @@ def run(argv: list[str] | None = None) -> Path | None:
         latest_trade_date = health.get("latest_trade_date")
         report_date = resolve_report_date(args.date, str(latest_trade_date) if latest_trade_date else None)
         final_report_date = report_date
+        if snapshot_type == "intraday" and report_date != preliminary_date:
+            message = f"当前日期 {preliminary_date} 尚无盘中日线，已跳过快照，最新交易日为 {report_date}"
+            logger.info(message)
+            db.finish_run(run_id, "skipped", report_date=report_date, message=message)
+            return None
+        if not args.offline and report_date == preliminary_date:
+            validate_latest_coverage(health, config.data.min_latest_stock_coverage)
         analysis_start = (
             datetime.strptime(report_date, "%Y-%m-%d").date()
             - timedelta(days=config.data.analysis_lookback_days)
@@ -508,14 +574,14 @@ def run(argv: list[str] | None = None) -> Path | None:
             return None
 
         eligible, filtered = build_stock_pool(stock_basic, stock_daily, report_date, config.stock_pool)
-        market = calculate_market_score(index_daily, stock_daily, report_date)
+        market = calculate_market_score(index_daily, stock_daily, report_date, stock_basic)
         sector_scores, strong_sectors = calculate_sector_scores(
             sector_daily,
             stock_basic,
             stock_daily,
             report_date,
         )
-        character = calculate_stock_character_scores(stock_daily, report_date)
+        character = calculate_stock_character_scores(stock_daily, report_date, stock_basic)
         volume_price = calculate_volume_price_scores(stock_daily, report_date)
 
         latest = _latest_stock_rows(stock_daily, report_date)
@@ -573,9 +639,12 @@ def run(argv: list[str] | None = None) -> Path | None:
         top50 = ranked.head(config.report.top_observe).copy()
         top10 = ranked.head(config.report.top_focus).copy()
 
-        db.save_selections(report_date, ranked, config.report.top_observe)
-        updated_returns = db.refresh_selection_returns()
-        logger.info("已更新 %s 条历史入选收益", updated_returns)
+        if snapshot_type == "close":
+            db.save_selections(report_date, ranked, config.report.top_observe)
+            updated_returns = db.refresh_selection_returns()
+            logger.info("已更新 %s 条历史入选收益", updated_returns)
+        else:
+            logger.info("盘中快照不写入正式入选与未来收益历史")
         performance = db.strategy_performance()
         health = db.data_health()
 
@@ -591,6 +660,7 @@ def run(argv: list[str] | None = None) -> Path | None:
             strategy_performance=performance,
             health=health,
             custom_strategy_results=custom_strategy_results,
+            snapshot_type=snapshot_type,
         )
         payload = build_report_payload(
             report_date,
@@ -604,6 +674,7 @@ def run(argv: list[str] | None = None) -> Path | None:
             strategy_screener_results=strategy_screener_results,
             custom_strategies=custom_strategies,
             custom_strategy_results=custom_strategy_results,
+            snapshot_type=snapshot_type,
         )
         html_path = write_static_report(
             config.report.site_dir,
@@ -614,11 +685,16 @@ def run(argv: list[str] | None = None) -> Path | None:
             run_id,
             "success",
             report_date=report_date,
-            message=f"生成 Top{len(top50)} 观察名单和 Top{len(top10)} 重点关注",
+            message=(
+                f"生成盘中快照：Top{len(top50)} 观察名单和 Top{len(top10)} 重点关注"
+                if snapshot_type == "intraday"
+                else f"生成 Top{len(top50)} 观察名单和 Top{len(top10)} 重点关注"
+            ),
             report_path=str(report_path),
             html_path=str(html_path),
         )
 
+        print(f"报告阶段：{'盘中快照' if snapshot_type == 'intraday' else '盘后正式报告'}")
         print(f"今日市场环境：{market['market_label']}")
         print(f"市场风险等级：{market['risk_level']}")
         print(f"上涨家数占比：{market['up_ratio']}%")
@@ -634,7 +710,7 @@ def run(argv: list[str] | None = None) -> Path | None:
                     run_id,
                     "failed",
                     report_date=final_report_date,
-                    message=str(exc)[:2000],
+                    message=summarize_run_error(exc),
                     report_path=str(report_path or ""),
                     html_path=str(html_path or ""),
                 )

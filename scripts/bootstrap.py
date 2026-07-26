@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--command", choices=["panel", "daily", "init", "publish"], default="panel")
     parser.add_argument("--date")
+    parser.add_argument("--snapshot", choices=["auto", "intraday", "close"], default="auto")
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
     return parser.parse_args()
@@ -61,6 +62,7 @@ def main() -> int:
             command.append("--init")
         if args.date:
             command.extend(["--date", args.date])
+        command.extend(["--snapshot", args.snapshot])
 
     result = subprocess.run(command, cwd=ROOT)
     if result.returncode == 0 and args.publish and args.command in {"daily", "init"}:

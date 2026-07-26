@@ -93,7 +93,14 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
     assert strategies["enabled"] == ["ma_volume"]
     assert custom["catalog"][0]["key"] == "test_formula"
     assert schedule["enabled"] is False
-    assert saved_schedule == {"supported": True, "enabled": True, "time": "18:00", "publish": True}
+    assert saved_schedule == {
+        "supported": True,
+        "enabled": True,
+        "time": "18:00",
+        "midday_enabled": False,
+        "midday_time": "12:30",
+        "publish": True,
+    }
     assert updated_custom["catalog"][0]["enabled"] is False
     assert updated["enabled"] == ["ma_volume", "sector_leader"]
     assert pool["min_list_days"] == 180

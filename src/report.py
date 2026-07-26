@@ -263,13 +263,23 @@ def _style_data_sheet(ws) -> None:
     _fit_columns(ws)
 
 
-def _write_market_sheet(writer: pd.ExcelWriter, report_date: str, market: dict[str, object], health: dict[str, object]) -> None:
+def _write_market_sheet(
+    writer: pd.ExcelWriter,
+    report_date: str,
+    market: dict[str, object],
+    health: dict[str, object],
+    snapshot_type: str = "close",
+) -> None:
     pd.DataFrame().to_excel(writer, sheet_name="市场环境", index=False, header=False)
     ws = writer.sheets["市场环境"]
     ws.sheet_view.showGridLines = False
     ws.merge_cells("A1:H2")
     title = ws["A1"]
-    title.value = f"{report_date} A股盘后观察"
+    title.value = (
+        f"{report_date} A股盘中快照"
+        if snapshot_type == "intraday"
+        else f"{report_date} A股盘后观察"
+    )
     title.font = Font(size=22, bold=True, color=COLORS["white"])
     title.fill = PatternFill("solid", fgColor=COLORS["header"])
     title.alignment = Alignment(horizontal="left", vertical="center")
@@ -314,7 +324,11 @@ def _write_market_sheet(writer: pd.ExcelWriter, report_date: str, market: dict[s
         ws.cell(offset, 2).font = Font(color=COLORS["red"] if float(index_changes.get(code, 0) or 0) >= 0 else COLORS["green"])
 
     ws.merge_cells("A16:H17")
-    ws["A16"] = "本报告仅用于盘后复盘和次日观察，不构成投资建议，也不执行自动交易。"
+    ws["A16"] = (
+        "本报告为盘中临时快照，当日日K尚未收盘，不写入正式策略收益历史，仅供观察。"
+        if snapshot_type == "intraday"
+        else "本报告仅用于盘后复盘和次日观察，不构成投资建议，也不执行自动交易。"
+    )
     ws["A16"].font = Font(color=COLORS["muted"], italic=True)
     ws["A16"].alignment = Alignment(wrap_text=True, vertical="center")
     ws["A16"].fill = PatternFill("solid", fgColor=COLORS["paper"])
@@ -334,14 +348,16 @@ def write_excel_report(
     strategy_performance: pd.DataFrame | None = None,
     health: dict[str, object] | None = None,
     custom_strategy_results: pd.DataFrame | None = None,
+    snapshot_type: str = "close",
 ) -> Path:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    path = output / f"{report_date}_盘后选股报告.xlsx"
+    suffix = "盘中选股快照" if snapshot_type == "intraday" else "盘后选股报告"
+    path = output / f"{report_date}_{suffix}.xlsx"
     performance = strategy_performance if strategy_performance is not None else pd.DataFrame()
     custom_results = custom_strategy_results if custom_strategy_results is not None else pd.DataFrame()
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        _write_market_sheet(writer, report_date, market, health or {})
+        _write_market_sheet(writer, report_date, market, health or {}, snapshot_type)
         _rename_existing(strong_sectors, SECTOR_COLUMNS).head(30).to_excel(writer, sheet_name="强势板块", index=False)
         _rename_existing(top50, TOP50_COLUMNS).to_excel(writer, sheet_name="Top50观察名单", index=False)
         _rename_existing(top10, TOP10_COLUMNS).to_excel(writer, sheet_name="Top10重点关注", index=False)

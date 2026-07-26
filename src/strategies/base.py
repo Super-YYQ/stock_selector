@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from src.indicators import limit_up_threshold
 
 @dataclass(frozen=True)
 class StrategyHit:
@@ -112,9 +113,10 @@ def build_strategy_history(
 
     reported_pct = pd.to_numeric(history["pct_chg"], errors="coerce")
     effective_pct = reported_pct.where(reported_pct.notna(), history["close_return"])
+    limit_threshold = history["code"].astype(str).map(limit_up_threshold)
     strong_close = history["close_position"].ge(0.7) & history["close"].ge(history["open"])
     history["limit_up_like"] = (
-        (effective_pct.ge(9.5) & history["close_position"].ge(0.9))
+        (effective_pct.ge(limit_threshold) & history["close_position"].ge(0.9))
         | (
             history["body_return"].ge(4.5)
             & history["close_position"].ge(0.95)

@@ -29,11 +29,35 @@ def add_rps(df: pd.DataFrame, return_column: str, output_column: str) -> pd.Data
     return result
 
 
-def limit_up_threshold(code: str) -> float:
-    if code.startswith(("300", "301", "688")):
+def daily_price_limit(code: str, is_st: bool = False) -> float:
+    normalized = str(code).zfill(6)
+    if normalized.startswith(("43", "83", "87", "88", "92")):
+        return 30.0
+    if normalized.startswith(("300", "301", "688", "689")):
+        return 20.0
+    if is_st:
+        return 5.0
+    return 10.0
+
+
+def limit_up_threshold(code: str, is_st: bool = False) -> float:
+    limit = daily_price_limit(code, is_st)
+    if limit >= 30:
+        return 29.5
+    if limit >= 20:
         return 19.5
+    if limit <= 5:
+        return 4.5
     return 9.5
 
 
-def is_limit_up(code: str, pct_chg: float) -> bool:
-    return pct_chg >= limit_up_threshold(code)
+def is_limit_up(code: str, pct_chg: float, is_st: bool = False) -> bool:
+    return pct_chg >= limit_up_threshold(code, is_st)
+
+
+def is_limit_down(code: str, pct_chg: float, is_st: bool = False) -> bool:
+    return pct_chg <= -limit_up_threshold(code, is_st)
+
+
+def is_price_jump_anomaly(code: str, pct_chg: float, is_st: bool = False) -> bool:
+    return abs(float(pct_chg)) > daily_price_limit(code, is_st) + 1.0

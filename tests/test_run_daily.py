@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -6,19 +7,53 @@ import pytest
 from src.config import AppConfig, DataConfig
 from src.fetch_data import TDX_PRICE_BASIS
 from src.database import Database
-from src.run_daily import parse_args, resolve_report_date, update_market_data, validate_initialization
+from src.run_daily import (
+    _next_fetch_start,
+    parse_args,
+    resolve_report_date,
+    resolve_snapshot_type,
+    summarize_run_error,
+    update_market_data,
+    validate_initialization,
+    validate_latest_coverage,
+)
 
 
-def test_parse_args_supports_init_date_and_offline() -> None:
-    args = parse_args(["--init", "--date", "2026-06-22", "--offline"])
+def test_parse_args_supports_init_date_offline_and_snapshot() -> None:
+    args = parse_args(["--init", "--date", "2026-06-22", "--offline", "--snapshot", "intraday"])
 
     assert args.init is True
     assert args.date == "2026-06-22"
     assert args.offline is True
+    assert args.snapshot == "intraday"
 
 
 def test_resolve_report_date_uses_requested_date() -> None:
     assert resolve_report_date("2026-06-22", "2026-06-21") == "2026-06-22"
+
+
+def test_snapshot_type_auto_detects_intraday_and_post_market() -> None:
+    assert resolve_snapshot_type("auto", "2026-06-22", datetime(2026, 6, 22, 12, 30)) == "intraday"
+    assert resolve_snapshot_type("auto", "2026-06-22", datetime(2026, 6, 22, 17, 30)) == "close"
+    assert resolve_snapshot_type("auto", "2026-06-21", datetime(2026, 6, 22, 12, 30)) == "close"
+
+
+def test_current_day_refresh_reuses_latest_date() -> None:
+    assert _next_fetch_start("2026-06-22", "2023-01-01", refresh_date="2026-06-22") == "2026-06-22"
+    assert _next_fetch_start("2026-06-22", "2023-01-01") == "2026-06-23"
+
+
+def test_validate_latest_coverage_rejects_partial_snapshot() -> None:
+    with pytest.raises(RuntimeError, match="latest trading-day"):
+        validate_latest_coverage({"latest_stock_coverage": 0.75}, 0.98)
+
+
+def test_summarize_run_error_translates_tdx_connection_failure() -> None:
+    summary = summarize_run_error(
+        RuntimeError("all configured TDX hosts failed: first: other errors | second: other errors")
+    )
+
+    assert summary == "TDX 行情服务器暂时无法连接（已尝试全部节点），本次未更新数据，请稍后重试。"
 
 
 def test_validate_initialization_rejects_incomplete_market_data(tmp_path: Path) -> None:

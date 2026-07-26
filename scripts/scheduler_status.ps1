@@ -22,6 +22,9 @@ if (-not $Task) {
         task_name = $TaskName
         state = "NotInstalled"
         time = "17:30"
+        midday_enabled = $false
+        midday_time = "12:30"
+        trigger_times = @()
         publish = $false
         next_run_time = $null
         last_run_time = $null
@@ -31,11 +34,18 @@ if (-not $Task) {
 }
 
 $Info = Get-ScheduledTaskInfo -TaskName $TaskName
-$Trigger = $Task.Triggers | Select-Object -First 1
 $Action = $Task.Actions | Select-Object -First 1
-$TaskTime = "17:30"
-if ($Trigger -and $Trigger.StartBoundary) {
-    $TaskTime = ([datetime]$Trigger.StartBoundary).ToString("HH:mm")
+$TriggerTimes = @(
+    $Task.Triggers |
+        Where-Object { $_.StartBoundary } |
+        ForEach-Object { ([datetime]$_.StartBoundary).ToString("HH:mm") } |
+        Sort-Object
+)
+$TaskTime = if ($TriggerTimes.Count -gt 0) { $TriggerTimes[-1] } else { "17:30" }
+$MiddayEnabled = $TriggerTimes.Count -gt 1
+$MiddayTime = "12:30"
+if ($MiddayEnabled) {
+    $MiddayTime = $TriggerTimes[0]
 }
 
 @{
@@ -44,6 +54,9 @@ if ($Trigger -and $Trigger.StartBoundary) {
     task_name = $TaskName
     state = [string]$Task.State
     time = $TaskTime
+    midday_enabled = $MiddayEnabled
+    midday_time = $MiddayTime
+    trigger_times = $TriggerTimes
     publish = [bool]($Action.Arguments -match "--publish")
     next_run_time = if ($Info.NextRunTime -and $Info.NextRunTime.Year -gt 1900) { $Info.NextRunTime.ToString("s") } else { $null }
     last_run_time = if ($Info.LastRunTime -and $Info.LastRunTime.Year -gt 2000) { $Info.LastRunTime.ToString("s") } else { $null }

@@ -153,11 +153,15 @@
     var payload = state.payload || {};
     var market = payload.market || {};
     var health = payload.health || {};
+    var intraday = payload.snapshot_type === "intraday" || payload.is_provisional === true;
     var upRatio = Number(market.up_ratio);
-    byId("report-date").textContent = payload.report_date || "--";
-    byId("brief-date").textContent = payload.report_date || "--";
-    byId("sidebar-date").textContent = "数据截止 " + (payload.report_date || "--");
-    byId("generated-at").textContent = payload.generated_at ? "生成于 " + payload.generated_at.replace("T", " ") : "--";
+    var reportDateLabel = (payload.report_date || "--") + (intraday ? " · 午间快照" : "");
+    byId("report-date").textContent = reportDateLabel;
+    byId("brief-date").textContent = reportDateLabel;
+    byId("sidebar-date").textContent = (intraday ? "盘中数据截止 " : "数据截止 ") + (payload.report_date || "--");
+    byId("generated-at").textContent = payload.generated_at
+      ? (intraday ? "盘中快照生成于 " : "生成于 ") + payload.generated_at.replace("T", " ")
+      : "--";
     byId("kpi-market").textContent = market.market_label || "--";
     byId("kpi-risk").textContent = "风险 " + (market.risk_level || "--");
     byId("kpi-score").textContent = number(market.market_score, 1);
@@ -863,9 +867,11 @@
       button.dataset.href = reports.length ? reports[0].download_url : "";
     }
     renderScheduler();
-    byId("mode-note").textContent = state.mode === "static"
-      ? "公开页面只展示筛选结果，不包含本地数据库、日志和任务执行权限。"
-      : "服务仅监听本机地址；远程部署时请配置访问控制和 HTTPS。";
+    byId("mode-note").textContent = intraday
+      ? "当前为盘中临时快照：当日日K尚未收盘，仅供观察，不写入正式策略收益历史。"
+      : state.mode === "static"
+        ? "公开页面只展示筛选结果，不包含本地数据库、日志和任务执行权限。"
+        : "服务仅监听本机地址；远程部署时请配置访问控制和 HTTPS。";
   }
 
   function displayDateTime(value) {
@@ -893,29 +899,41 @@
     var enabled = Boolean(scheduler.enabled);
     var dirty = supported && state.schedulerDirty;
     var draftTime = dirty ? (byId("scheduler-time").value || scheduler.time || "17:30") : (scheduler.time || "17:30");
+    var middayEnabled = dirty ? byId("scheduler-midday-enabled").checked : Boolean(scheduler.midday_enabled);
+    var middayTime = dirty
+      ? (byId("scheduler-midday-time").value || scheduler.midday_time || "12:30")
+      : (scheduler.midday_time || "12:30");
+    var scheduleLabel = middayEnabled
+      ? middayTime + " 午间快照，" + draftTime + " 盘后复盘"
+      : draftTime + " 盘后复盘";
     var statusNode = byId("scheduler-state");
     statusNode.textContent = !loaded ? "读取中" : (!supported ? "不支持" : (dirty ? "待保存" : (enabled ? "已启用" : "未启用")));
     statusNode.className = "scheduler-state" + (dirty ? " pending" : (enabled ? " active" : ""));
     if (!dirty) {
       byId("scheduler-time").value = scheduler.time || "17:30";
+      byId("scheduler-midday-enabled").checked = Boolean(scheduler.midday_enabled);
+      byId("scheduler-midday-time").value = scheduler.midday_time || "12:30";
       byId("scheduler-publish").checked = Boolean(scheduler.publish);
     }
     byId("scheduler-time").disabled = !supported;
+    byId("scheduler-midday-enabled").disabled = !supported;
+    byId("scheduler-midday-time").disabled = !supported || !middayEnabled;
     byId("scheduler-publish").disabled = !supported;
     byId("save-scheduler-button").disabled = !supported;
     byId("disable-scheduler-button").disabled = !supported || !enabled;
     byId("scheduler-summary-title").textContent = dirty
-      ? "保存后工作日 " + draftTime + " 自动复盘"
+      ? "保存后工作日 " + scheduleLabel
       : enabled
-        ? "工作日 " + draftTime + " 自动复盘"
-      : "工作日盘后自动复盘";
+        ? "工作日 " + scheduleLabel
+      : "工作日自动复盘";
     byId("scheduler-summary-text").textContent = !supported
       ? (scheduler.message || "当前系统不支持本地计划任务管理")
       : (dirty
-        ? "修改尚未保存；当前计划仍为工作日 " + (scheduler.time || "17:30") + "。"
+        ? "修改尚未保存；保存后将按新时段执行。"
         : enabled
-        ? "计划任务已生效" + (scheduler.publish ? "，完成后会推送网页报告。" : "，报告只保存在本机。")
-        : "设置时间后启用，电脑关机期间不会运行，恢复可用后会补跑一次。");
+        ? (middayEnabled ? "午间生成盘中快照，盘后重新抓取当日行情并生成正式报告。" : "盘后正式复盘已生效。") +
+          (scheduler.publish ? " 每次完成后会推送网页报告。" : " 报告只保存在本机。")
+        : "设置时段后启用；午间快照不会写入正式策略收益历史。");
     byId("scheduler-next-run").textContent = displayDateTime(scheduler.next_run_time);
     byId("scheduler-last-run").textContent = displayDateTime(scheduler.last_run_time);
     byId("scheduler-last-result").textContent = schedulerResultLabel(scheduler.last_result);
@@ -931,6 +949,8 @@
     var body = {
       enabled: enabled,
       time: byId("scheduler-time").value || "17:30",
+      midday_enabled: byId("scheduler-midday-enabled").checked,
+      midday_time: byId("scheduler-midday-time").value || "12:30",
       publish: byId("scheduler-publish").checked
     };
     byId("save-scheduler-button").disabled = true;
@@ -973,14 +993,34 @@
         message: "任务已启动，正在更新数据"
       });
     }
+    var successfulCloseDates = new Set(displayRows.filter(function (row) {
+      return row.status === "success" && row.mode !== "intraday";
+    }).map(function (row) {
+      return String(row.report_date || "");
+    }));
     var columns = [
       { key: "started_at", label: "开始时间", format: function (v) { return escapeHtml(String(v || "").replace("T", " ")); } },
-      { key: "mode", label: "模式", format: function (v) { return v === "init" ? "初始化" : "每日增量"; } },
-      { key: "report_date", label: "报告日期" },
-      { key: "status", label: "状态", format: function (v) {
-        return ({ running: "运行中", success: "成功", failed: "失败" })[v] || escapeHtml(v);
+      { key: "mode", label: "模式", format: function (v) {
+        return ({ init: "初始化", intraday: "盘中快照", daily: "盘后复盘" })[v] || escapeHtml(v);
       } },
-      { key: "message", label: "说明", className: function () { return "signal-cell"; } }
+      { key: "report_date", label: "报告日期" },
+      { key: "status", label: "状态", className: function (v) {
+        return v === "failed" ? "run-status-failed" : "";
+      }, format: function (v) {
+        return ({ running: "运行中", success: "成功", failed: "失败", skipped: "已跳过" })[v] || escapeHtml(v);
+      } },
+      { key: "message", label: "说明", className: function (v, row) {
+        return "signal-cell" + (row.status === "failed" ? " run-message-failed" : "");
+      }, format: function (v, row) {
+        var message = String(v || "");
+        if (row.status === "failed" && message.indexOf("all configured TDX hosts failed") >= 0) {
+          var summary = successfulCloseDates.has(String(row.report_date || ""))
+            ? "TDX 行情服务器当时无法连接；当天已有成功结果，本次重跑失败不影响已有报告。"
+            : "TDX 行情服务器暂时无法连接，本次未更新数据，请稍后重试。";
+          return '<span title="' + escapeHtml(message) + '">' + escapeHtml(summary) + "</span>";
+        }
+        return escapeHtml(message);
+      } }
     ];
     byId("runs-table").innerHTML = tableHtml(columns, displayRows);
   }
@@ -1107,6 +1147,8 @@
     byId("save-scheduler-button").addEventListener("click", function () { saveScheduler(true); });
     byId("disable-scheduler-button").addEventListener("click", function () { saveScheduler(false); });
     byId("scheduler-time").addEventListener("input", markSchedulerDirty);
+    byId("scheduler-midday-enabled").addEventListener("change", markSchedulerDirty);
+    byId("scheduler-midday-time").addEventListener("input", markSchedulerDirty);
     byId("scheduler-publish").addEventListener("change", markSchedulerDirty);
     byId("download-report-button").addEventListener("click", function (event) {
       var href = event.currentTarget.dataset.href;

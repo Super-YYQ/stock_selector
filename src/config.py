@@ -36,6 +36,7 @@ class DataConfig:
     tdx_timeout_seconds: float = 3.0
     tdx_query_retries: int = 3
     init_min_stock_coverage: float = 0.90
+    min_latest_stock_coverage: float = 0.98
     init_min_daily_rows: int = 100000
     init_min_index_count: int = 3
     analysis_lookback_days: int = 240
@@ -153,6 +154,8 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("tdx_query_retries must be greater than 0")
     if not 0 < config.data.init_min_stock_coverage <= 1:
         raise ValueError("init_min_stock_coverage must be in (0, 1]")
+    if not 0 < config.data.min_latest_stock_coverage <= 1:
+        raise ValueError("min_latest_stock_coverage must be in (0, 1]")
     if config.data.init_min_daily_rows < 1:
         raise ValueError("init_min_daily_rows must be greater than 0")
     if config.data.init_min_index_count < 1:
