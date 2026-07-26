@@ -170,7 +170,14 @@ def test_init_falls_back_to_tdx_when_baostock_login_is_blacklisted(tmp_path: Pat
 
     db = Database(tmp_path / "stock.db")
     db.initialize()
-    config = AppConfig(data=DataConfig(database=str(tmp_path / "stock.db"), provider="mixed", baostock_parallel_workers=1))
+    config = AppConfig(
+        data=DataConfig(
+            database=str(tmp_path / "stock.db"),
+            provider="mixed",
+            tdx_parallel_workers=1,
+            baostock_parallel_workers=1,
+        )
+    )
 
     class BlacklistedBaostockFetcher:
         def __enter__(self):
