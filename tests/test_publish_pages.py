@@ -35,6 +35,21 @@ def report_payload(report_date: str) -> dict[str, object]:
     }
 
 
+def report_payload_with_snapshot(
+    report_date: str,
+    snapshot_type: str,
+    is_provisional: bool,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "report_date": report_date,
+        "generated_at": f"{report_date}T16:00:00",
+        "snapshot_type": snapshot_type,
+        "is_provisional": is_provisional,
+        "top50": [],
+    }
+
+
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -237,6 +252,67 @@ def test_publish_refuses_modified_retained_history(
     write_json(
         repo / f"site/data/history/{INITIAL_DATE}.json",
         {"report_date": INITIAL_DATE, "unexpected": "manual edit"},
+    )
+
+    with pytest.raises(RuntimeError, match="既有历史报告存在额外修改"):
+        publish_pages.main([])
+
+
+def test_publish_upgrades_intraday_to_close_for_retained_history(
+    publish_repo: tuple[Path, Path],
+) -> None:
+    repo, remote = publish_repo
+    intraday_payload = report_payload_with_snapshot(INITIAL_DATE, "intraday", True)
+    write_json(repo / "site/data/latest.json", intraday_payload)
+    write_json(repo / f"site/data/history/{INITIAL_DATE}.json", intraday_payload)
+    run_git(
+        repo,
+        "add",
+        "--",
+        "site/data/latest.json",
+        f"site/data/history/{INITIAL_DATE}.json",
+    )
+    run_git(repo, "commit", "-m", "provisional intraday for initial date")
+    run_git(repo, "push", "origin", "main")
+
+    close_payload = report_payload_with_snapshot(INITIAL_DATE, "close", False)
+    write_json(repo / f"site/data/history/{INITIAL_DATE}.json", close_payload)
+    write_snapshot(repo, NEW_DATE, [NEW_DATE, INITIAL_DATE])
+
+    assert publish_pages.main([]) == 0
+
+    commit_sha = remote_head(remote)
+    changed_paths = {
+        line.strip()
+        for line in run_git(
+            repo,
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            commit_sha,
+        ).stdout.splitlines()
+        if line.strip()
+    }
+    assert f"site/data/history/{INITIAL_DATE}.json" in changed_paths
+    assert "site/data/history.json" in changed_paths
+    assert f"site/data/history/{NEW_DATE}.json" in changed_paths
+    assert "site/data/latest.json" in changed_paths
+    upgraded = json.loads(
+        run_git(repo, "show", f"{commit_sha}:site/data/history/{INITIAL_DATE}.json").stdout
+    )
+    assert upgraded["is_provisional"] is False
+    assert upgraded["snapshot_type"] == "close"
+
+
+def test_publish_refuses_close_to_intraday_revert_of_retained_history(
+    publish_repo: tuple[Path, Path],
+) -> None:
+    repo, _ = publish_repo
+    write_snapshot(repo, NEW_DATE, [NEW_DATE, INITIAL_DATE])
+    write_json(
+        repo / f"site/data/history/{INITIAL_DATE}.json",
+        report_payload_with_snapshot(INITIAL_DATE, "intraday", True),
     )
 
     with pytest.raises(RuntimeError, match="既有历史报告存在额外修改"):

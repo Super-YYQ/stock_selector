@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from src.run_lock import RUN_LOCK_TOKEN_ENV, SingleInstanceRunLock
 VENV = ROOT / ".venv"
 REQUIREMENTS = ROOT / "requirements.txt"
 RUN_LOCK_PATH = ROOT / "data" / "run_daily.lock"
+LATEST_REPORT_PATH = "site/data/latest.json"
 
 
 def venv_python() -> Path:
@@ -54,6 +56,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _latest_report_is_provisional() -> bool:
+    """仅当 site/data/latest.json 成功解析为 dict 且为盘中临时快照时返回 True。
+
+    任何读取或解析失败都返回 False（fail-open，照常发布），这样测试里
+    subprocess.run 被 mock 不会真正写出该文件时仍能进入发布，也将运维中
+    的瞬时读取错误转化为不丢发布，避免悄悄吞掉应当发布的正式报告。"""
+    path = ROOT / LATEST_REPORT_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    if bool(data.get("is_provisional")):
+        return True
+    snapshot_type = data.get("snapshot_type")
+    return isinstance(snapshot_type, str) and snapshot_type == "intraday"
+
+
 def _execute(args: argparse.Namespace, child_env: dict[str, str] | None = None) -> int:
     python = ensure_environment()
     if args.command == "panel":
@@ -72,6 +93,9 @@ def _execute(args: argparse.Namespace, child_env: dict[str, str] | None = None) 
 
     result = subprocess.run(command, cwd=ROOT, env=child_env)
     if result.returncode == 0 and args.publish and args.command in {"daily", "init"}:
+        if _latest_report_is_provisional():
+            print("跳过发布：当前为盘中临时快照（intraday），不作为正式报告发布")
+            return result.returncode
         result = subprocess.run(
             [str(python), str(ROOT / "scripts" / "publish_pages.py")],
             cwd=ROOT,

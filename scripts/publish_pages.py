@@ -260,6 +260,53 @@ def _is_dirty_against_head(path: str) -> bool:
     return git("diff", "--quiet", "HEAD", "--", path, check=False).returncode != 0
 
 
+def _read_head_blob_json(path: str) -> object | None:
+    blob = git("show", f"HEAD:{path}", check=False)
+    if blob.returncode != 0:
+        return None
+    try:
+        return json.loads(blob.stdout)
+    except (OSError, ValueError):
+        return None
+
+
+def _is_intraday_to_close_upgrade(path: str) -> bool:
+    """只对唯一合法的既有报告分歧返回 True：HEAD 是盘中临时快照
+    (is_provisional=true) 且工作区为同 report_date 的正式盘后报告
+    (is_provisional=false、snapshot_type=="close")，且该 report_date 与
+    文件名日期一致。任何其它分歧（手改、schema 不符、日期错位、文件名
+    与 report_date 不一致等）都返回 False，由调用方照旧硬失败。"""
+    match = HISTORY_PATH_RE.match(path)
+    if match is None:
+        return False
+    filename_date = match.group(1)
+
+    head = _read_head_blob_json(path)
+    if not isinstance(head, dict):
+        return False
+    if not bool(head.get("is_provisional")):
+        return False
+    head_date = head.get("report_date")
+    if not isinstance(head_date, str) or head_date != filename_date:
+        return False
+
+    try:
+        working = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(working, dict):
+        return False
+    if bool(working.get("is_provisional")):
+        return False
+    working_type = working.get("snapshot_type")
+    if not (isinstance(working_type, str) and working_type == "close"):
+        return False
+    working_date = working.get("report_date")
+    if not isinstance(working_date, str) or working_date != filename_date:
+        return False
+    return working_date == head_date
+
+
 def _load_report_snapshot() -> ReportSnapshot:
     latest_path = ROOT / REPORT_PATHS[0]
     latest = _read_json(latest_path, "site/data/latest.json ")
@@ -304,12 +351,16 @@ def _load_report_snapshot() -> ReportSnapshot:
     if latest_path.read_bytes() != (ROOT / current_history).read_bytes():
         raise RuntimeError("latest.json 与同日期历史报告内容不一致，已停止发布")
 
+    upgraded_paths: list[str] = []
     for path in listed_paths:
         if path == current_history:
             continue
         if not _is_tracked(path):
             raise RuntimeError(f"历史索引包含非本次生成的未跟踪文件: {path}")
         if _is_dirty_against_head(path):
+            if _is_intraday_to_close_upgrade(path):
+                upgraded_paths.append(path)
+                continue
             raise RuntimeError(f"既有历史报告存在额外修改，未纳入自动发布: {path}")
 
     tracked_history = {
@@ -323,7 +374,7 @@ def _load_report_snapshot() -> ReportSnapshot:
         if (ROOT / path).exists():
             raise RuntimeError(f"历史索引与磁盘文件不一致，未自动删除: {path}")
 
-    managed = (*REPORT_PATHS, current_history, *stale_history)
+    managed = (*REPORT_PATHS, current_history, *upgraded_paths, *stale_history)
     return ReportSnapshot(report_date=report_date, managed_paths=tuple(dict.fromkeys(managed)))
 
 

@@ -48,3 +48,48 @@ def test_bootstrap_holds_one_lock_across_daily_and_publish(
     assert all(call["cwd"] == tmp_path for call in calls)
     assert all(call["token"] == call["owner_token"] for call in calls)
     assert not lock_path.exists()
+
+
+def test_bootstrap_skips_publish_when_latest_is_provisional(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock_path = tmp_path / "run_daily.lock"
+    python = tmp_path / "python"
+    calls: list[dict[str, object]] = []
+    args = argparse.Namespace(
+        command="daily",
+        date=None,
+        snapshot="intraday",
+        publish=True,
+        no_browser=False,
+    )
+
+    monkeypatch.setattr(bootstrap, "RUN_LOCK_PATH", lock_path)
+    monkeypatch.setattr(bootstrap, "ROOT", tmp_path)
+    monkeypatch.setattr(bootstrap, "parse_args", lambda: args)
+    monkeypatch.setattr(bootstrap, "ensure_environment", lambda: python)
+
+    def fake_run(command, *, cwd, env=None):
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        calls.append({"command": command})
+        # Simulate run_daily writing a provisional latest.json on the first call.
+        latest = tmp_path / "site/data/latest.json"
+        latest.parent.mkdir(parents=True, exist_ok=True)
+        latest.write_text(
+            json.dumps(
+                {
+                    "report_date": "2026-08-03",
+                    "snapshot_type": "intraday",
+                    "is_provisional": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+
+    assert bootstrap.main() == 0
+    # The provisional snapshot suppresses the second publish_pages.py call.
+    assert len(calls) == 1
