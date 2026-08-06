@@ -1,5 +1,9 @@
 [
   {
+    "report_date": "2026-08-06",
+    "path": "data/history/2026-08-06.json"
+  },
+  {
     "report_date": "2026-08-05",
     "path": "data/history/2026-08-05.json"
   },
