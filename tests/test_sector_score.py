@@ -55,6 +55,7 @@ def test_local_market_board_fallback_assigns_industry_and_aggregates_daily() -> 
     sectors = build_market_board_daily(prepared, daily)
 
     assert prepared["industry"].tolist() == ["深市主板", "创业板", "科创板", "北交所"]
+    assert set(prepared["industry_source"]) == {"market_board_fallback"}
     assert set(sectors["sector_name"]) == {"深市主板", "创业板", "科创板", "北交所"}
     assert sectors.loc[sectors["sector_name"] == "北交所", "amount"].iloc[0] == 400
 

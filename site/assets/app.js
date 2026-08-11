@@ -827,7 +827,10 @@
   }
 
   function renderPerformance(rows) {
-    var columns = [
+    var hasNetPerformance = rows.some(function (row) {
+      return row.valid_count_5d != null;
+    });
+    var legacyColumns = [
       { key: "strategy", label: "策略" },
       { key: "sample_count", label: "样本" },
       { key: "return_1d", label: "1日收益", className: valueClass, format: pct },
@@ -837,7 +840,20 @@
       { key: "return_10d", label: "10日收益", className: valueClass, format: pct },
       { key: "win_rate_10d", label: "10日胜率", format: function (v) { return v == null ? "--" : number(v, 1) + "%"; } }
     ];
-    byId("performance-table").innerHTML = tableHtml(columns, rows);
+    var netColumns = [
+      { key: "strategy", label: "策略" },
+      { key: "sample_count", label: "入选" },
+      { key: "valid_count_5d", label: "有效5日" },
+      { key: "return_1d", label: "1日净收益", className: valueClass, format: pct },
+      { key: "win_rate_1d", label: "1日胜率", format: function (v) { return v == null ? "--" : number(v, 1) + "%"; } },
+      { key: "return_5d", label: "5日净收益", className: valueClass, format: pct },
+      { key: "median_return_5d", label: "5日中位", className: valueClass, format: pct },
+      { key: "excess_return_5d", label: "5日超额", className: valueClass, format: pct },
+      { key: "win_rate_5d", label: "5日胜率", format: function (v) { return v == null ? "--" : number(v, 1) + "%"; } },
+      { key: "return_10d", label: "10日净收益", className: valueClass, format: pct },
+      { key: "win_rate_10d", label: "10日胜率", format: function (v) { return v == null ? "--" : number(v, 1) + "%"; } }
+    ];
+    byId("performance-table").innerHTML = tableHtml(hasNetPerformance ? netColumns : legacyColumns, rows);
   }
 
   function renderSystem() {

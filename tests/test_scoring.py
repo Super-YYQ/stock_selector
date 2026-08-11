@@ -1,7 +1,7 @@
 import pandas as pd
 
 from src.config import ReportConfig, ScoringConfig
-from src.scoring import build_ranked_results
+from src.scoring import build_ranked_results, select_report_candidates
 
 
 def test_build_ranked_results_weights_scores_and_builds_text() -> None:
@@ -69,3 +69,44 @@ def test_build_ranked_results_weights_scores_and_builds_text() -> None:
     assert "放量突破" in ranked.iloc[0]["selection_reason"]
     assert "命中策略" in ranked.iloc[0]["selection_reason"]
     assert "不追高" in ranked.iloc[0]["next_day_condition"]
+
+
+def test_report_candidates_apply_confidence_and_industry_caps() -> None:
+    ranked = pd.DataFrame(
+        [
+            {"code": f"00000{i}", "industry": "银行", "industry_source": "sw2021", "total_score": score}
+            for i, score in enumerate([90, 85, 80, 40], start=1)
+        ]
+        + [{"code": "300001", "industry": "电子", "industry_source": "sw2021", "total_score": 75}]
+    )
+    report = ReportConfig(
+        top_observe=5,
+        top_focus=3,
+        min_observe_score=45,
+        min_focus_score=80,
+        max_per_industry=2,
+    )
+
+    observe, focus = select_report_candidates(ranked, report)
+
+    assert observe["code"].tolist() == ["000001", "000002", "300001"]
+    assert focus["code"].tolist() == ["000001", "000002"]
+
+
+def test_cross_sectional_calibration_preserves_zero_signal() -> None:
+    factors = pd.DataFrame(
+        [
+            {"code": "000001", "sector_score_raw": 100, "rps20": 100, "rps60": 100},
+            {"code": "000002", "sector_score_raw": 0, "rps20": 0, "rps60": 0},
+        ]
+    )
+
+    ranked, _, _ = build_ranked_results(
+        factors,
+        {"market_score": 5, "market_label": "中性"},
+        ScoringConfig(factor_percentile_blend=1),
+        ReportConfig(min_observe_score=0, min_focus_score=0),
+    )
+
+    weak = ranked[ranked["code"] == "000002"].iloc[0]
+    assert weak["sector_score_raw_calibrated"] == 0

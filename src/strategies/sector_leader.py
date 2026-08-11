@@ -14,8 +14,12 @@ class SectorLeaderStrategy(Strategy):
 
     def evaluate(self, daily, report_date, factors, features=None) -> pd.DataFrame:
         latest = strategy_features(daily, report_date, factors, features)
+        industry_source = latest.get(
+            "industry_source", pd.Series("", index=latest.index, dtype="object")
+        ).fillna("")
         mask = (
             latest["sector_score_raw"].ge(55)
+            & industry_source.ne("market_board_fallback")
             & latest["rps20"].ge(82)
             & latest["close"].ge(latest["ma20"])
             & latest["pct_chg"].ge(0)

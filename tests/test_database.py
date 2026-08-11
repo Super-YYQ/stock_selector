@@ -1,8 +1,48 @@
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
+from src.config import PerformanceConfig
 from src.database import Database
+
+
+def test_initialize_adds_performance_columns_to_existing_database(tmp_path: Path) -> None:
+    path = tmp_path / "stock.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE selection_history (
+                report_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                total_score REAL,
+                close REAL,
+                matched_strategies TEXT,
+                strategy_families TEXT,
+                return_1d REAL,
+                return_3d REAL,
+                return_5d REAL,
+                return_10d REAL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (report_date, code)
+            )
+            """
+        )
+
+    Database(path).initialize()
+
+    with sqlite3.connect(path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(selection_history)")}
+    assert {
+        "entry_date",
+        "entry_open",
+        "return_status",
+        "return_basis",
+        "excess_return_1d",
+        "excess_return_10d",
+    } <= columns
 
 
 def test_database_creates_core_tables(tmp_path: Path) -> None:
@@ -207,13 +247,19 @@ def test_selection_history_refreshes_forward_returns_and_performance(tmp_path: P
 
     db.save_selections("2026-06-22", ranked)
     db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
-    updated = db.refresh_selection_returns()
+    updated = db.refresh_selection_returns(
+        PerformanceConfig(entry_cost_bps=0, exit_cost_bps=0)
+    )
     stored = db.read_table("selection_history")
     performance = db.strategy_performance()
 
     assert updated == 1
     assert stored.loc[0, "return_1d"] == 23
     assert stored.loc[0, "return_5d"] == 27
+    assert stored.loc[0, "entry_date"] == "2026-06-23"
+    assert stored.loc[0, "entry_open"] == 10
+    assert stored.loc[0, "return_basis"] == "next_open_net_v1"
+    assert performance.loc[0, "valid_count_5d"] == 1
     assert len(performance) == 2
     assert set(performance["strategy"]) == {"均线放量突破", "RPS强势突破"}
 

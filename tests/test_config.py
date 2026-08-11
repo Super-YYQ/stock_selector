@@ -26,6 +26,10 @@ features:
   enable_sector_score: false
 scoring:
   risk_penalty_max: 18
+performance:
+  benchmark_index_code: sz399001
+  entry_cost_bps: 5
+  exit_cost_bps: 10
 strategies:
   enabled:
     - ma_volume
@@ -58,6 +62,8 @@ risk:
     assert config.data.init_min_daily_rows == 50000
     assert config.report.top_observe == 20
     assert config.report.top_focus == 10
+    assert config.report.min_observe_score == 45
+    assert config.report.max_per_industry == 5
     assert config.features.enable_sector_score is False
     assert config.stock_pool.min_price == 4
     assert config.stock_pool.min_list_days == 120
@@ -66,8 +72,13 @@ risk:
     assert config.features.context_top_n == 50
     assert config.risk.max_pct_chg_5d == 22
     assert config.scoring.risk_penalty_max == 18
+    assert config.scoring.factor_percentile_blend == 0.5
+    assert config.performance.benchmark_index_code == "sz399001"
+    assert config.performance.entry_cost_bps == 5
+    assert config.performance.exit_cost_bps == 10
     assert config.strategies.enabled == ["ma_volume"]
     assert config.strategies.strategy_score_weight == 12
+    assert config.strategies.max_scoring_hit_rate == 0.20
 
 
 def test_load_config_rejects_invalid_threshold(tmp_path: Path) -> None:

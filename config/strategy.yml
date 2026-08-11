@@ -22,6 +22,10 @@ report:
   output_dir: reports
   site_dir: site
   history_days: 90
+  min_observe_score: 45
+  min_focus_score: 60
+  max_per_industry: 5
+  max_per_market_board: 20
 
 panel:
   host: 127.0.0.1
@@ -44,6 +48,14 @@ scoring:
   relative_strength_weight: 15
   market_adjust_weight: 10
   risk_penalty_max: 20
+  factor_percentile_blend: 0.50
+
+performance:
+  benchmark_index_code: sh000001
+  entry_cost_bps: 8
+  exit_cost_bps: 13
+  exclude_untradable_entry: true
+  exclude_price_jump_anomaly: true
 
 strategies:
   enabled:
@@ -61,6 +73,8 @@ strategies:
   profile: balanced
   strategy_score_weight: 15
   top_per_strategy: 20
+  max_scoring_hit_rate: 0.20
+  min_selectivity_multiplier: 0.25
   parameters:
     volume_breakout_pullback:
       min_score: 51

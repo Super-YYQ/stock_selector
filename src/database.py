@@ -8,6 +8,9 @@ from typing import Iterable
 
 import pandas as pd
 
+from src.config import PerformanceConfig
+from src.performance import HORIZONS, evaluate_selection_returns
+
 
 LOGGER = logging.getLogger(__name__)
 SQLITE_BUSY_TIMEOUT_MS = 5_000
@@ -74,6 +77,32 @@ CREATE TABLE IF NOT EXISTS sector_daily (
     PRIMARY KEY (sector_name, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS stock_industry_history (
+    code TEXT NOT NULL,
+    industry_code TEXT NOT NULL,
+    industry_name TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    source TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (code, valid_from, industry_code)
+);
+
+CREATE TABLE IF NOT EXISTS factor_diagnostic (
+    report_date TEXT NOT NULL,
+    factor TEXT NOT NULL,
+    sample_count INTEGER NOT NULL,
+    valid_count INTEGER NOT NULL,
+    coverage REAL,
+    mean REAL,
+    std REAL,
+    p10 REAL,
+    p50 REAL,
+    p90 REAL,
+    zero_rate REAL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (report_date, factor)
+);
+
 CREATE TABLE IF NOT EXISTS run_metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -131,10 +160,18 @@ CREATE TABLE IF NOT EXISTS selection_history (
     close REAL,
     matched_strategies TEXT,
     strategy_families TEXT,
+    entry_date TEXT,
+    entry_open REAL,
+    return_status TEXT DEFAULT 'pending',
+    return_basis TEXT,
     return_1d REAL,
     return_3d REAL,
     return_5d REAL,
     return_10d REAL,
+    excess_return_1d REAL,
+    excess_return_3d REAL,
+    excess_return_5d REAL,
+    excess_return_10d REAL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (report_date, code)
@@ -154,11 +191,23 @@ CREATE TABLE IF NOT EXISTS run_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_daily_trade_date ON stock_daily(trade_date);
+CREATE INDEX IF NOT EXISTS idx_stock_industry_asof ON stock_industry_history(code, valid_from);
 CREATE INDEX IF NOT EXISTS idx_selection_history_date ON selection_history(report_date);
 CREATE INDEX IF NOT EXISTS idx_run_history_started_at ON run_history(started_at);
 CREATE INDEX IF NOT EXISTS idx_stock_sync_lookup
 ON stock_sync_status(provider, price_basis, start_date, end_date);
 """
+
+SELECTION_HISTORY_ADDITIVE_COLUMNS = {
+    "entry_date": "TEXT",
+    "entry_open": "REAL",
+    "return_status": "TEXT DEFAULT 'pending'",
+    "return_basis": "TEXT",
+    "excess_return_1d": "REAL",
+    "excess_return_3d": "REAL",
+    "excess_return_5d": "REAL",
+    "excess_return_10d": "REAL",
+}
 
 
 class Database:
@@ -181,6 +230,13 @@ class Database:
                 # Keep the existing journal mode instead of preventing startup.
                 LOGGER.warning("SQLite WAL mode is unavailable, keeping the current journal mode: %s", exc)
             conn.executescript(SCHEMA_SQL)
+            existing_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(selection_history)").fetchall()
+            }
+            for column, definition in SELECTION_HISTORY_ADDITIVE_COLUMNS.items():
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE selection_history ADD COLUMN {column} {definition}")
             conn.commit()
 
     def list_tables(self) -> set[str]:
@@ -225,6 +281,13 @@ class Database:
         with self.connect() as conn:
             conn.execute("UPDATE stock_basic SET is_listed = 0")
             conn.commit()
+
+    def save_factor_diagnostics(self, diagnostics: pd.DataFrame) -> int:
+        return self.upsert_dataframe(
+            "factor_diagnostic",
+            diagnostics,
+            ["report_date", "factor"],
+        )
 
     def latest_dates(self, table: str, key_column: str, date_column: str = "trade_date") -> dict[str, str]:
         with self.connect() as conn:
@@ -418,7 +481,8 @@ class Database:
             conn.commit()
         return len(records)
 
-    def refresh_selection_returns(self) -> int:
+    def refresh_selection_returns(self, performance: PerformanceConfig | None = None) -> int:
+        settings = performance or PerformanceConfig()
         with self.connect() as conn:
             selections = pd.read_sql_query(
                 """
@@ -432,7 +496,7 @@ class Database:
                 return 0
             daily = pd.read_sql_query(
                 """
-                SELECT code, trade_date, close
+                SELECT code, trade_date, open, high, low, close, pct_chg, is_suspended
                 FROM stock_daily
                 WHERE trade_date > ?
                 ORDER BY code, trade_date
@@ -440,44 +504,54 @@ class Database:
                 conn,
                 params=(str(selections["report_date"].min()),),
             )
-        if daily.empty:
+            index_daily = pd.read_sql_query(
+                """
+                SELECT trade_date, open, close
+                FROM index_daily
+                WHERE index_code = ? AND trade_date > ?
+                ORDER BY trade_date
+                """,
+                conn,
+                params=(settings.benchmark_index_code, str(selections["report_date"].min())),
+            )
+
+        evaluated = evaluate_selection_returns(selections, daily, index_daily, settings)
+        evaluated = evaluated[evaluated["entry_date"].notna()].copy()
+        if evaluated.empty:
             return 0
 
-        grouped = {code: frame.reset_index(drop=True) for code, frame in daily.groupby("code", sort=False)}
-        horizons = {1: "return_1d", 3: "return_3d", 5: "return_5d", 10: "return_10d"}
         updates: list[tuple[object, ...]] = []
         now = datetime.now().isoformat(timespec="seconds")
-        for row in selections.itertuples(index=False):
-            future = grouped.get(str(row.code))
-            if future is None:
-                continue
-            future = future[future["trade_date"] > str(row.report_date)].head(10)
-            values: dict[str, float | None] = {column: None for column in horizons.values()}
-            for horizon, column in horizons.items():
-                if len(future) >= horizon:
-                    values[column] = round((float(future.iloc[horizon - 1]["close"]) / float(row.close) - 1) * 100, 4)
-            if any(value is not None for value in values.values()):
-                updates.append(
-                    (
-                        values["return_1d"],
-                        values["return_3d"],
-                        values["return_5d"],
-                        values["return_10d"],
-                        now,
-                        str(row.report_date),
-                        str(row.code),
-                    )
+        for row in evaluated.itertuples(index=False):
+            updates.append(
+                (
+                    row.entry_date,
+                    row.entry_open,
+                    row.return_status,
+                    row.return_basis,
+                    *[getattr(row, f"return_{horizon}d") for horizon in HORIZONS],
+                    *[getattr(row, f"excess_return_{horizon}d") for horizon in HORIZONS],
+                    now,
+                    str(row.report_date),
+                    str(row.code),
                 )
-        if not updates:
-            return 0
+            )
         with self.connect() as conn:
             conn.executemany(
                 """
                 UPDATE selection_history
-                SET return_1d = COALESCE(?, return_1d),
-                    return_3d = COALESCE(?, return_3d),
-                    return_5d = COALESCE(?, return_5d),
-                    return_10d = COALESCE(?, return_10d),
+                SET entry_date = ?,
+                    entry_open = ?,
+                    return_status = ?,
+                    return_basis = ?,
+                    return_1d = ?,
+                    return_3d = ?,
+                    return_5d = ?,
+                    return_10d = ?,
+                    excess_return_1d = ?,
+                    excess_return_3d = ?,
+                    excess_return_5d = ?,
+                    excess_return_10d = ?,
                     updated_at = ?
                 WHERE report_date = ? AND code = ?
                 """,
@@ -491,14 +565,18 @@ class Database:
         columns = [
             "strategy",
             "sample_count",
-            "return_1d",
-            "win_rate_1d",
-            "return_3d",
-            "win_rate_3d",
-            "return_5d",
-            "win_rate_5d",
-            "return_10d",
-            "win_rate_10d",
+            *[
+                column
+                for horizon in HORIZONS
+                for column in (
+                    f"valid_count_{horizon}d",
+                    f"return_{horizon}d",
+                    f"median_return_{horizon}d",
+                    f"win_rate_{horizon}d",
+                    f"excess_return_{horizon}d",
+                    f"excess_win_rate_{horizon}d",
+                )
+            ],
         ]
         if history.empty:
             return pd.DataFrame(columns=columns)
@@ -507,8 +585,9 @@ class Database:
             names = [name for name in str(row.matched_strategies or "").split("、") if name]
             for name in names:
                 record = {"strategy": name}
-                for horizon in (1, 3, 5, 10):
+                for horizon in HORIZONS:
                     record[f"return_{horizon}d"] = getattr(row, f"return_{horizon}d")
+                    record[f"excess_return_{horizon}d"] = getattr(row, f"excess_return_{horizon}d", None)
                 records.append(record)
         if not records:
             return pd.DataFrame(columns=columns)
@@ -516,15 +595,25 @@ class Database:
         rows: list[dict[str, object]] = []
         for strategy, group in expanded.groupby("strategy", sort=False):
             item: dict[str, object] = {"strategy": strategy, "sample_count": len(group)}
-            for horizon in (1, 3, 5, 10):
+            for horizon in HORIZONS:
                 column = f"return_{horizon}d"
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
+                item[f"valid_count_{horizon}d"] = int(len(values))
                 item[column] = round(float(values.mean()), 2) if not values.empty else None
+                item[f"median_return_{horizon}d"] = round(float(values.median()), 2) if not values.empty else None
                 item[f"win_rate_{horizon}d"] = round(float(values.gt(0).mean() * 100), 2) if not values.empty else None
+                excess_column = f"excess_return_{horizon}d"
+                excess_values = pd.to_numeric(group[excess_column], errors="coerce").dropna()
+                item[excess_column] = round(float(excess_values.mean()), 2) if not excess_values.empty else None
+                item[f"excess_win_rate_{horizon}d"] = (
+                    round(float(excess_values.gt(0).mean() * 100), 2)
+                    if not excess_values.empty
+                    else None
+                )
             rows.append(item)
         return pd.DataFrame(rows, columns=columns).sort_values(
-            ["return_5d", "sample_count"],
-            ascending=[False, False],
+            ["excess_return_5d", "return_5d", "valid_count_5d"],
+            ascending=[False, False, False],
             na_position="last",
         ).reset_index(drop=True)
 

@@ -97,14 +97,18 @@ SECTOR_COLUMNS = {
 
 PERFORMANCE_COLUMNS = {
     "strategy": "策略",
-    "sample_count": "样本数",
-    "return_1d": "平均1日收益",
+    "sample_count": "入选样本",
+    "valid_count_1d": "有效1日样本",
+    "return_1d": "平均1日净收益",
     "win_rate_1d": "1日胜率",
-    "return_3d": "平均3日收益",
-    "win_rate_3d": "3日胜率",
-    "return_5d": "平均5日收益",
+    "valid_count_5d": "有效5日样本",
+    "return_5d": "平均5日净收益",
+    "median_return_5d": "5日中位净收益",
     "win_rate_5d": "5日胜率",
-    "return_10d": "平均10日收益",
+    "excess_return_5d": "平均5日超额收益",
+    "excess_win_rate_5d": "5日跑赢基准率",
+    "valid_count_10d": "有效10日样本",
+    "return_10d": "平均10日净收益",
     "win_rate_10d": "10日胜率",
 }
 

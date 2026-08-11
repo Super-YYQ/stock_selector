@@ -39,6 +39,9 @@ STRATEGY_HIT_COLUMNS = [
     "strategy",
     "strategy_family",
     "strategy_score_raw",
+    "strategy_score_effective",
+    "strategy_hit_rate",
+    "strategy_selectivity_multiplier",
     "strategy_reason",
 ]
 STRATEGY_SCREENER_RESULT_COLUMNS = [
@@ -135,13 +138,16 @@ class StrategyEvaluation:
 
 
 def _aggregate_code_hits(group: pd.DataFrame) -> pd.Series:
-    family_scores = group.groupby("strategy_family")["strategy_score_raw"].max()
+    score_column = "strategy_score_effective" if "strategy_score_effective" in group.columns else "strategy_score_raw"
+    family_scores = group.groupby("strategy_family")[score_column].max()
     details = [
         {
             "key": row.strategy_key,
             "name": row.strategy,
             "family": row.strategy_family,
             "score": float(row.strategy_score_raw),
+            "effective_score": float(getattr(row, "strategy_score_effective", row.strategy_score_raw)),
+            "hit_rate": float(getattr(row, "strategy_hit_rate", 0.0)),
             "reason": row.strategy_reason,
         }
         for row in group.itertuples(index=False)
@@ -165,6 +171,8 @@ def evaluate_enabled_strategies(
     factors: pd.DataFrame,
     enabled: list[str],
     parameters: dict[str, dict[str, object]] | None = None,
+    max_scoring_hit_rate: float = 1.0,
+    min_selectivity_multiplier: float = 1.0,
 ) -> StrategyEvaluation:
     source_codes = factors["code"] if "code" in factors.columns else daily["code"]
     codes = pd.DataFrame({"code": sorted(set(source_codes.astype(str)))})
@@ -193,6 +201,15 @@ def evaluate_enabled_strategies(
         )
 
     all_hits = pd.concat(hits, ignore_index=True)
+    universe_size = max(len(codes), 1)
+    hit_rates = all_hits.groupby("strategy_key")["code"].nunique().div(universe_size)
+    all_hits["strategy_hit_rate"] = all_hits["strategy_key"].map(hit_rates).astype(float)
+    all_hits["strategy_selectivity_multiplier"] = (
+        max_scoring_hit_rate / all_hits["strategy_hit_rate"].replace(0, pd.NA)
+    ).clip(lower=min_selectivity_multiplier, upper=1.0).fillna(1.0)
+    all_hits["strategy_score_effective"] = (
+        all_hits["strategy_score_raw"] * all_hits["strategy_selectivity_multiplier"]
+    )
     rows = []
     for code, group in all_hits.groupby("code", sort=False):
         row = _aggregate_code_hits(group).to_dict()
@@ -230,6 +247,8 @@ def run_enabled_strategies(
     factors: pd.DataFrame,
     enabled: list[str],
     parameters: dict[str, dict[str, object]] | None = None,
+    max_scoring_hit_rate: float = 1.0,
+    min_selectivity_multiplier: float = 1.0,
 ) -> pd.DataFrame:
     return evaluate_enabled_strategies(
         daily,
@@ -237,6 +256,8 @@ def run_enabled_strategies(
         factors,
         enabled,
         parameters,
+        max_scoring_hit_rate,
+        min_selectivity_multiplier,
     ).aggregate
 
 

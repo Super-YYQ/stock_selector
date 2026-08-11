@@ -81,6 +81,30 @@ def test_run_enabled_strategies_returns_zero_when_disabled() -> None:
     assert result.loc[0, "matched_strategies"] == ""
 
 
+def test_strategy_selectivity_downweights_overbroad_hits() -> None:
+    daily = _strategy_daily()
+    factors = pd.DataFrame(
+        [
+            {"code": "000001", "rps20": 92, "rps60": 88},
+            {"code": "000002", "rps20": 20, "rps60": 30},
+        ]
+    )
+
+    evaluation = evaluate_enabled_strategies(
+        daily,
+        "2026-05-61",
+        factors,
+        ["ma_volume"],
+        max_scoring_hit_rate=0.20,
+        min_selectivity_multiplier=0.25,
+    )
+
+    hit = evaluation.hits.iloc[0]
+    assert hit["strategy_hit_rate"] == 0.5
+    assert hit["strategy_selectivity_multiplier"] == 0.4
+    assert evaluation.aggregate.loc[evaluation.aggregate["code"] == "000001", "strategy_score_raw"].iloc[0] == 14
+
+
 def test_strategy_catalog_contains_all_strategy_families() -> None:
     catalog = strategy_catalog()
 

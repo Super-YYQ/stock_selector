@@ -53,6 +53,10 @@ class ReportConfig:
     output_dir: str = "reports"
     site_dir: str = "site"
     history_days: int = 90
+    min_observe_score: float = 45
+    min_focus_score: float = 60
+    max_per_industry: int = 5
+    max_per_market_board: int = 20
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,16 @@ class ScoringConfig:
     relative_strength_weight: float = 15
     market_adjust_weight: float = 10
     risk_penalty_max: float = 20
+    factor_percentile_blend: float = 0.50
+
+
+@dataclass(frozen=True)
+class PerformanceConfig:
+    benchmark_index_code: str = "sh000001"
+    entry_cost_bps: float = 8.0
+    exit_cost_bps: float = 13.0
+    exclude_untradable_entry: bool = True
+    exclude_price_jump_anomaly: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,6 +103,8 @@ class StrategyConfig:
     profile: str = "balanced"
     strategy_score_weight: float = 15
     top_per_strategy: int = 20
+    max_scoring_hit_rate: float = 0.20
+    min_selectivity_multiplier: float = 0.25
     parameters: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
@@ -119,6 +135,7 @@ class AppConfig:
     panel: PanelConfig = field(default_factory=PanelConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     strategies: StrategyConfig = field(default_factory=StrategyConfig)
     stock_pool: StockPoolConfig = field(default_factory=StockPoolConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
@@ -189,16 +206,30 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("top_observe must be greater than or equal to top_focus")
     if config.report.history_days < 1:
         raise ValueError("report.history_days must be greater than 0")
+    if not 0 <= config.report.min_observe_score <= config.report.min_focus_score <= 100:
+        raise ValueError("report score thresholds must satisfy 0 <= observe <= focus <= 100")
+    if config.report.max_per_industry < 1 or config.report.max_per_market_board < 1:
+        raise ValueError("report diversification limits must be greater than 0")
     if not 1 <= config.panel.port <= 65535:
         raise ValueError("panel.port must be between 1 and 65535")
     if config.scoring.risk_penalty_max < 0:
         raise ValueError("risk_penalty_max must be non-negative")
+    if not 0 <= config.scoring.factor_percentile_blend <= 1:
+        raise ValueError("scoring.factor_percentile_blend must be in [0, 1]")
+    if not config.performance.benchmark_index_code.strip():
+        raise ValueError("performance.benchmark_index_code must not be empty")
+    if config.performance.entry_cost_bps < 0 or config.performance.exit_cost_bps < 0:
+        raise ValueError("performance costs must be non-negative")
     if config.strategies.strategy_score_weight < 0:
         raise ValueError("strategy_score_weight must be non-negative")
     if config.strategies.profile not in {"balanced", "breakout", "pullback", "steady", "custom"}:
         raise ValueError("strategies.profile must be one of: balanced, breakout, pullback, steady, custom")
     if config.strategies.top_per_strategy < 1:
         raise ValueError("strategies.top_per_strategy must be greater than 0")
+    if not 0 < config.strategies.max_scoring_hit_rate <= 1:
+        raise ValueError("strategies.max_scoring_hit_rate must be in (0, 1]")
+    if not 0 < config.strategies.min_selectivity_multiplier <= 1:
+        raise ValueError("strategies.min_selectivity_multiplier must be in (0, 1]")
     if not isinstance(config.strategies.parameters, dict):
         raise ValueError("strategies.parameters must be a mapping")
 
@@ -214,6 +245,7 @@ def load_config(config_dir: str | Path = "config") -> AppConfig:
         panel=PanelConfig(**_section(strategy, "panel")),
         features=FeatureConfig(**_section(strategy, "features")),
         scoring=ScoringConfig(**_section(strategy, "scoring")),
+        performance=PerformanceConfig(**_section(strategy, "performance")),
         strategies=StrategyConfig(**_section(strategy, "strategies")),
         stock_pool=StockPoolConfig(**_section(stock_pool, "stock_pool")),
         risk=RiskConfig(**_section(stock_pool, "risk")),

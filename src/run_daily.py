@@ -15,6 +15,7 @@ from src.build_pool import build_stock_pool
 from src.config import AppConfig, load_config
 from src.custom_formulas import FormulaConfigError, evaluate_custom_formulas
 from src.database import Database
+from src.industry_data import apply_point_in_time_industry, fetch_sw_industry_history
 from src.fetch_data import (
     TDX_PRICE_BASIS,
     AkshareDataFetcher,
@@ -23,11 +24,12 @@ from src.fetch_data import (
     fetch_stock_daily_parallel,
     fetch_tdx_stock_daily_parallel,
 )
+from src.factor_diagnostics import build_factor_diagnostics
 from src.market_score import calculate_market_score
 from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
 from src.run_lock import coordinated_run_lock
-from src.scoring import build_ranked_results
+from src.scoring import build_ranked_results, select_report_candidates
 from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
 from src.strategies.registry import (
     build_strategy_screener_data,
@@ -469,6 +471,7 @@ def update_market_data(
         "stock_daily": 0,
         "index_daily": 0,
         "sector_daily": 0,
+        "stock_industry_history": 0,
         "failed_symbols": 0,
         "fresh_stock_symbols": 0,
         "fresh_index_symbols": 0,
@@ -510,6 +513,19 @@ def update_market_data(
         if basic.empty:
             logger.warning("无股票基础信息，跳过行情更新")
             return counts
+
+        if init and not external_fetcher:
+            try:
+                logger.info("正在刷新申万行业历史分类")
+                industry_history = fetch_sw_industry_history()
+                if not industry_history.empty:
+                    counts["stock_industry_history"] = db.upsert_dataframe(
+                        "stock_industry_history",
+                        industry_history,
+                        ["code", "valid_from", "industry_code"],
+                    )
+            except Exception as exc:
+                logger.warning("申万行业历史分类刷新失败，保留本地历史并继续: %s", exc)
 
         latest_stock_dates = db.latest_dates("stock_daily", "code")
         latest_index_dates = db.latest_dates("index_daily", "index_code")
@@ -820,6 +836,12 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
         stock_daily = db.read_table_between("stock_daily", "trade_date", analysis_start, report_date)
         index_daily = db.read_table_between("index_daily", "trade_date", analysis_start, report_date)
         sector_daily = db.read_table_between("sector_daily", "trade_date", analysis_start, report_date)
+        industry_history = _safe_read(
+            db,
+            "stock_industry_history",
+            ["code", "industry_code", "industry_name", "valid_from", "source", "updated_at"],
+        )
+        stock_basic = apply_point_in_time_industry(stock_basic, industry_history, report_date)
         stock_basic = fill_market_board_industry(stock_basic)
         if config.features.enable_sector_score and sector_daily.empty:
             logger.info("外部行业数据不可用，使用本地市场板块聚合评分")
@@ -856,11 +878,14 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
             factors,
             config.strategies.enabled,
             config.strategies.parameters,
+            config.strategies.max_scoring_hit_rate,
+            config.strategies.min_selectivity_multiplier,
         )
         factors = factors.merge(strategy_evaluation.aggregate, on="code", how="left")
         factors = _add_risk_inputs(factors)
         risk = calculate_risk_penalties(factors, config.risk, config.scoring)
         factors = factors.merge(risk, on="code", how="left")
+        factor_diagnostics = build_factor_diagnostics(factors, report_date)
         ranked, _top50, _top10 = build_ranked_results(
             factors,
             market,
@@ -894,12 +919,12 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
             )
         except (FormulaConfigError, OSError, ValueError) as exc:
             logger.warning("自定义公式配置异常，已跳过且不影响主任务: %s", exc)
-        top50 = ranked.head(config.report.top_observe).copy()
-        top10 = ranked.head(config.report.top_focus).copy()
+        top50, top10 = select_report_candidates(ranked, config.report)
 
         if snapshot_type == "close":
-            db.save_selections(report_date, ranked, config.report.top_observe)
-            updated_returns = db.refresh_selection_returns()
+            db.save_factor_diagnostics(factor_diagnostics)
+            db.save_selections(report_date, top50, config.report.top_observe)
+            updated_returns = db.refresh_selection_returns(config.performance)
             logger.info("已更新 %s 条历史入选收益", updated_returns)
         else:
             logger.info("盘中快照不写入正式入选与未来收益历史")

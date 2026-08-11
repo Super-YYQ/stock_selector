@@ -23,8 +23,13 @@ def fill_market_board_industry(stock_basic: pd.DataFrame) -> pd.DataFrame:
     prepared = stock_basic.copy()
     if "industry" not in prepared.columns:
         prepared["industry"] = ""
+    if "industry_source" not in prepared.columns:
+        prepared["industry_source"] = prepared["industry"].fillna("").astype(str).str.strip().ne("").map(
+            {True: "stock_basic", False: ""}
+        )
     missing = prepared["industry"].isna() | prepared["industry"].astype(str).str.strip().eq("")
     prepared.loc[missing, "industry"] = prepared.loc[missing, "code"].astype(str).map(market_board)
+    prepared.loc[missing, "industry_source"] = "market_board_fallback"
     return prepared
 
 
