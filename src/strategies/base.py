@@ -199,7 +199,14 @@ def build_strategy_features(
     if factors is not None and not factors.empty:
         factor_columns = [
             column
-            for column in ["code", "rps20", "rps60", "sector_score_raw", "industry"]
+            for column in [
+                "code",
+                "rps20",
+                "rps60",
+                "sector_score_raw",
+                "industry",
+                "industry_source",
+            ]
             if column in factors.columns
         ]
         if len(factor_columns) > 1:

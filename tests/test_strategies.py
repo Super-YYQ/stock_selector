@@ -105,6 +105,32 @@ def test_strategy_selectivity_downweights_overbroad_hits() -> None:
     assert evaluation.aggregate.loc[evaluation.aggregate["code"] == "000001", "strategy_score_raw"].iloc[0] == 14
 
 
+def test_sector_leader_rejects_market_board_industry_fallback() -> None:
+    daily = _strategy_daily()
+    factors = pd.DataFrame(
+        [
+            {
+                "code": "000001",
+                "rps20": 92,
+                "rps60": 88,
+                "sector_score_raw": 90,
+                "industry": "深市主板",
+                "industry_source": "market_board_fallback",
+            }
+        ]
+    )
+
+    evaluation = evaluate_enabled_strategies(
+        daily,
+        "2026-05-61",
+        factors,
+        ["sector_leader"],
+    )
+
+    assert evaluation.hits.empty
+    assert evaluation.aggregate.loc[0, "strategy_score_raw"] == 0
+
+
 def test_strategy_catalog_contains_all_strategy_families() -> None:
     catalog = strategy_catalog()
 
