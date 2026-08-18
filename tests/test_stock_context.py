@@ -1,10 +1,14 @@
 import json
+import logging
+import threading
+import time
 
 import pandas as pd
 
 from src.stock_context import (
     _fetch_sector_activity_one,
     calculate_sector_activity,
+    fetch_limit_up_events,
     merge_stock_context,
     normalize_core_theme_rows,
 )
@@ -140,3 +144,65 @@ def test_fetch_sector_activity_uses_sw_primary_index(monkeypatch) -> None:
     assert calls[0]["params"] == {"swindexcode": "801010", "period": "DAY"}
     assert result["sector_name"] == "农林牧渔"
     assert result["return_20d"] > 0
+
+
+def test_fetch_limit_up_events_uses_timeout_and_normalizes_rows(monkeypatch) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {
+                    "pool": [
+                        {
+                            "c": "000001",
+                            "lbc": 2,
+                            "hybk": "银行",
+                            "zttj": {"days": 3, "ct": 2},
+                        }
+                    ]
+                }
+            }
+
+    calls: list[dict[str, object]] = []
+
+    def fake_get(url: str, **kwargs: object) -> Response:
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    result = fetch_limit_up_events("2026-08-18", request_timeout=3.5, hard_timeout=1)
+
+    assert calls[0]["timeout"] == 3.5
+    assert calls[0]["params"]["date"] == "20260818"
+    assert result.iloc[0]["code"] == "000001"
+    assert result.iloc[0]["industry"] == "银行"
+    assert result.iloc[0]["summary"] == "当日涨停，涨停统计 3/2，2 连板"
+
+
+def test_fetch_limit_up_events_hard_timeout_skips_blocked_request(
+    monkeypatch,
+    caplog,
+) -> None:
+    release = threading.Event()
+
+    def blocked_get(*args: object, **kwargs: object) -> None:
+        release.wait(timeout=1)
+
+    monkeypatch.setattr("requests.get", blocked_get)
+    started = time.monotonic()
+    try:
+        with caplog.at_level(logging.WARNING):
+            result = fetch_limit_up_events(
+                "2026-08-18",
+                request_timeout=60,
+                hard_timeout=0.02,
+            )
+    finally:
+        release.set()
+
+    assert time.monotonic() - started < 0.5
+    assert result.empty
+    assert "已跳过且不影响报告" in caplog.text

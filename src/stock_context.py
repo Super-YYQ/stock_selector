@@ -6,7 +6,9 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
-from typing import Any, Iterable
+from queue import Empty, Queue
+from threading import Thread
+from typing import Any, Callable, Iterable
 
 import pandas as pd
 
@@ -17,7 +19,12 @@ from src.sector_score import market_board
 
 LOGGER = logging.getLogger(__name__)
 CORE_THEME_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+LIMIT_UP_POOL_URL = "https://push2ex.eastmoney.com/getTopicZTPool"
 SW_INDEX_TREND_URL = "https://www.swsresearch.com/institute-sw/api/index_publish/trend/"
+CORE_THEME_HARD_DEADLINE_SECONDS = 10.0
+LIMIT_UP_REQUEST_TIMEOUT_SECONDS = 8.0
+LIMIT_UP_HARD_DEADLINE_SECONDS = 10.0
+SECTOR_CONTEXT_HARD_DEADLINE_SECONDS = 35.0
 SW_PRIMARY_INDEXES = {
     "农林牧渔": "801010", "基础化工": "801030", "钢铁": "801040", "有色金属": "801050",
     "电子": "801080", "家用电器": "801110", "食品饮料": "801120", "纺织服饰": "801130",
@@ -43,6 +50,39 @@ GENERIC_CONCEPTS = {
     "深圳特区",
 }
 DYNAMIC_WORDS = ("昨日", "近期", "新高", "涨停", "高振幅", "趋势股", "连板")
+
+
+def _run_with_deadline(
+    callback: Callable[[], Any],
+    timeout: float,
+    description: str,
+) -> Any:
+    """Run best-effort network work behind a wall-clock deadline.
+
+    Requests' connect/read timeout does not cover every blocking point on every
+    platform (notably DNS resolution). A daemon boundary keeps optional context
+    enrichment from blocking the main report indefinitely.
+    """
+
+    outcome: Queue[tuple[bool, Any]] = Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            outcome.put((True, callback()))
+        except Exception as exc:
+            outcome.put((False, exc))
+
+    worker = Thread(target=invoke, name="context-deadline", daemon=True)
+    worker.start()
+    try:
+        succeeded, value = outcome.get(timeout=max(0.1, float(timeout)))
+    except Empty as exc:
+        raise TimeoutError(f"{description}超过 {timeout:g} 秒，已跳过") from exc
+    if succeeded:
+        return value
+    if isinstance(value, BaseException):
+        raise value
+    raise RuntimeError(f"{description}失败")
 
 
 def _as_text(value: object) -> str:
@@ -123,7 +163,15 @@ def fetch_stock_contexts(codes: Iterable[str], workers: int = 4) -> pd.DataFrame
     records: list[dict[str, object]] = []
     max_workers = max(1, min(int(workers), len(unique_codes)))
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="context-fetch") as executor:
-        futures = {executor.submit(_fetch_core_theme_one, code): code for code in unique_codes}
+        futures = {
+            executor.submit(
+                _run_with_deadline,
+                lambda code=code: _fetch_core_theme_one(code),
+                CORE_THEME_HARD_DEADLINE_SECONDS,
+                f"[{code}] 核心题材请求",
+            ): code
+            for code in unique_codes
+        }
         for future in as_completed(futures):
             code = futures[future]
             try:
@@ -136,24 +184,59 @@ def fetch_stock_contexts(codes: Iterable[str], workers: int = 4) -> pd.DataFrame
     return pd.DataFrame(records)
 
 
-def fetch_limit_up_events(trade_date: str) -> pd.DataFrame:
-    columns = ["trade_date", "code", "event_type", "summary", "industry", "updated_at"]
-    try:
-        import akshare as ak
+def _fetch_limit_up_pool(trade_date: str, timeout: float) -> list[dict[str, object]]:
+    import requests
 
-        raw = ak.stock_zt_pool_em(date=str(trade_date).replace("-", ""))
+    params = {
+        "ut": "7eea3edcaed734bea9cbfc24409ed989",
+        "dpt": "wz.ztzt",
+        "Pageindex": "0",
+        "pagesize": "10000",
+        "sort": "fbt:asc",
+        "date": str(trade_date).replace("-", ""),
+    }
+    response = requests.get(LIMIT_UP_POOL_URL, params=params, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else None
+    pool = data.get("pool") if isinstance(data, dict) else None
+    return [row for row in (pool or []) if isinstance(row, dict)]
+
+
+def fetch_limit_up_events(
+    trade_date: str,
+    request_timeout: float = LIMIT_UP_REQUEST_TIMEOUT_SECONDS,
+    hard_timeout: float = LIMIT_UP_HARD_DEADLINE_SECONDS,
+) -> pd.DataFrame:
+    columns = ["trade_date", "code", "event_type", "summary", "industry", "updated_at"]
+    LOGGER.info("正在更新 %s 涨停池（最长等待 %.0f 秒）", trade_date, hard_timeout)
+    try:
+        rows = _run_with_deadline(
+            lambda: _fetch_limit_up_pool(trade_date, request_timeout),
+            hard_timeout,
+            f"{trade_date} 涨停池请求",
+        )
     except Exception as exc:
-        LOGGER.warning("涨停池更新失败: %s", exc)
+        LOGGER.warning("涨停池更新失败，已跳过且不影响报告: %s", exc)
         return pd.DataFrame(columns=columns)
-    if raw.empty or "代码" not in raw.columns:
+    if not rows:
+        LOGGER.info("%s 涨停池无可用记录，继续生成报告", trade_date)
         return pd.DataFrame(columns=columns)
 
     now = datetime.now().isoformat(timespec="seconds")
     records = []
-    for row in raw.to_dict("records"):
-        code = str(row.get("代码", "")).zfill(6)
-        statistics = _as_text(row.get("涨停统计"))
-        streak = pd.to_numeric(row.get("连板数"), errors="coerce")
+    for row in rows:
+        code = _as_text(row.get("c") or row.get("code")).zfill(6)
+        if not code.strip("0"):
+            continue
+        statistics_value = row.get("zttj") or row.get("statistics")
+        if isinstance(statistics_value, dict):
+            days = _as_text(statistics_value.get("days"))
+            count = _as_text(statistics_value.get("ct"))
+            statistics = f"{days}/{count}" if days and count else days or count
+        else:
+            statistics = _as_text(statistics_value)
+        streak = pd.to_numeric(row.get("lbc") or row.get("streak"), errors="coerce")
         parts = ["当日涨停"]
         if statistics:
             parts.append(f"涨停统计 {statistics}")
@@ -165,10 +248,11 @@ def fetch_limit_up_events(trade_date: str) -> pd.DataFrame:
                 "code": code,
                 "event_type": "limit_up",
                 "summary": "，".join(parts),
-                "industry": _as_text(row.get("所属行业")),
+                "industry": _as_text(row.get("hybk") or row.get("industry")),
                 "updated_at": now,
             }
         )
+    LOGGER.info("%s 涨停池更新完成：%s 条", trade_date, len(records))
     return pd.DataFrame(records, columns=columns)
 
 
@@ -282,7 +366,15 @@ def fetch_sector_contexts(sector_names: Iterable[str], report_date: str, workers
     records: list[dict[str, object]] = []
     max_workers = max(1, min(int(workers), len(names), 2))
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="sector-context") as executor:
-        futures = {executor.submit(_fetch_sector_activity_one, name, report_date): name for name in names}
+        futures = {
+            executor.submit(
+                _run_with_deadline,
+                lambda name=name: _fetch_sector_activity_one(name, report_date),
+                SECTOR_CONTEXT_HARD_DEADLINE_SECONDS,
+                f"[{name}] 行业阶段表现请求",
+            ): name
+            for name in names
+        }
         for future in as_completed(futures):
             name = futures[future]
             try:
@@ -325,6 +417,7 @@ def refresh_context_cache(
     if refresh_codes:
         LOGGER.info("正在更新 %s 只候选股的行业与核心题材", len(refresh_codes))
         fresh = fetch_stock_contexts(refresh_codes, config.context_workers)
+        LOGGER.info("候选股行业与核心题材更新结束：成功 %s/%s", len(fresh), len(refresh_codes))
         if not fresh.empty:
             db.upsert_dataframe("stock_context", fresh, ["code"])
 
@@ -349,7 +442,9 @@ def refresh_context_cache(
     existing = set(current_sector.get("sector_name", pd.Series(dtype=str)).astype(str))
     missing_sectors = [name for name in dict.fromkeys(sectors) if name and name not in existing]
     if missing_sectors:
+        LOGGER.info("正在更新 %s 个行业的阶段表现", min(len(missing_sectors), 20))
         fresh_sector = fetch_sector_contexts(missing_sectors[:20], report_date, config.context_workers)
+        LOGGER.info("行业阶段表现更新结束：成功 %s/%s", len(fresh_sector), min(len(missing_sectors), 20))
         if not fresh_sector.empty:
             db.upsert_dataframe("sector_context", fresh_sector, ["sector_name", "as_of_date"])
             current_sector = pd.concat([current_sector, fresh_sector], ignore_index=True)
