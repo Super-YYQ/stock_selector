@@ -6,6 +6,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -80,6 +81,44 @@ def setup_logging(report_date: str) -> None:
             logging.FileHandler(log_dir / f"run_{report_date}.log", encoding="utf-8"),
             logging.StreamHandler(),
         ],
+    )
+
+
+@contextmanager
+def _report_output_stage(
+    logger: logging.Logger,
+    artifact: str,
+    start_detail: str = "",
+):
+    started = perf_counter()
+    logger.info("开始生成%s%s", artifact, start_detail)
+    try:
+        yield
+    except Exception:
+        logger.exception("%s生成失败（耗时 %.1f 秒）", artifact, perf_counter() - started)
+        raise
+    else:
+        logger.info("%s生成完成（耗时 %.1f 秒）", artifact, perf_counter() - started)
+
+
+def _log_run_summary(
+    logger: logging.Logger,
+    snapshot_type: str,
+    market: dict[str, Any],
+    report_path: Path,
+    html_path: Path,
+) -> None:
+    logger.info(
+        "任务全部完成，准备退出并交还后续发布流程：阶段=%s，市场=%s，风险=%s，"
+        "上涨家数占比=%s%%，涨停=%s，跌停=%s，Excel=%s，网页=%s",
+        "盘中快照" if snapshot_type == "intraday" else "盘后正式报告",
+        market["market_label"],
+        market["risk_level"],
+        market["up_ratio"],
+        market["limit_up_count"],
+        market["limit_down_count"],
+        report_path,
+        html_path,
     )
 
 
@@ -759,7 +798,6 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
                 message = f"{session.message}，自动任务已跳过，未更新行情或生成报告。"
                 logger.info(message)
                 db.finish_run(run_id, "skipped", report_date=preliminary_date, message=message)
-                print(message)
                 return None
             if session.state == "unknown":
                 logger.warning("%s；继续尝试更新，随后将执行严格的当日行情校验", session.message)
@@ -931,20 +969,25 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
         performance = db.strategy_performance()
         health = db.quick_data_health()
 
-        report_path = write_excel_report(
-            config.report.output_dir,
-            report_date,
-            market,
-            strong_sectors,
-            top50,
-            top10,
-            ranked,
-            filtered,
-            strategy_performance=performance,
-            health=health,
-            custom_strategy_results=custom_strategy_results,
-            snapshot_type=snapshot_type,
-        )
+        with _report_output_stage(
+            logger,
+            " Excel 报告",
+            "（数据量较大时可能需要数分钟，期间任务仍在运行）",
+        ):
+            report_path = write_excel_report(
+                config.report.output_dir,
+                report_date,
+                market,
+                strong_sectors,
+                top50,
+                top10,
+                ranked,
+                filtered,
+                strategy_performance=performance,
+                health=health,
+                custom_strategy_results=custom_strategy_results,
+                snapshot_type=snapshot_type,
+            )
         payload = build_report_payload(
             report_date,
             market,
@@ -959,11 +1002,14 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
             custom_strategy_results=custom_strategy_results,
             snapshot_type=snapshot_type,
         )
-        html_path = write_static_report(
-            config.report.site_dir,
-            payload,
-            history_days=config.report.history_days,
-        )
+        with _report_output_stage(logger, "网页报告"):
+            html_path = write_static_report(
+                config.report.site_dir,
+                payload,
+                history_days=config.report.history_days,
+            )
+        logger.info("报告文件已写出：Excel=%s，网页=%s", report_path, html_path)
+        logger.info("正在写入任务成功状态")
         db.finish_run(
             run_id,
             "success",
@@ -976,15 +1022,7 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
             report_path=str(report_path),
             html_path=str(html_path),
         )
-
-        print(f"报告阶段：{'盘中快照' if snapshot_type == 'intraday' else '盘后正式报告'}")
-        print(f"今日市场环境：{market['market_label']}")
-        print(f"市场风险等级：{market['risk_level']}")
-        print(f"上涨家数占比：{market['up_ratio']}%")
-        print(f"涨停家数：{market['limit_up_count']}")
-        print(f"跌停家数：{market['limit_down_count']}")
-        print(f"Excel 报告：{report_path}")
-        print(f"网页报告：{html_path}")
+        _log_run_summary(logger, snapshot_type, market, report_path, html_path)
         return report_path
     except Exception as exc:
         if db is not None and run_started:

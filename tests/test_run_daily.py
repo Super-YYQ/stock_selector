@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -11,7 +12,9 @@ from src.run_lock import RunAlreadyLockedError, SingleInstanceRunLock
 from src.run_daily import (
     MarketSessionProbe,
     _is_automatic_online_run,
+    _log_run_summary,
     _next_fetch_start,
+    _report_output_stage,
     _requires_current_market_data,
     parse_args,
     probe_market_session,
@@ -23,6 +26,44 @@ from src.run_daily import (
     validate_initialization,
     validate_latest_coverage,
 )
+
+
+def test_report_output_stage_logs_start_and_elapsed_time(caplog) -> None:
+    logger = logging.getLogger("tests.run_daily.report_stage")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        with _report_output_stage(logger, " Excel 报告", "（可能需要数分钟）"):
+            pass
+
+    assert "开始生成 Excel 报告（可能需要数分钟）" in caplog.text
+    assert "Excel 报告生成完成（耗时" in caplog.text
+
+
+def test_run_summary_uses_logging_instead_of_stdout(monkeypatch, caplog, tmp_path: Path) -> None:
+    def fail_print(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("run summary must not write to stdout")
+
+    monkeypatch.setattr("builtins.print", fail_print)
+    logger = logging.getLogger("tests.run_daily.summary")
+    market = {
+        "market_label": "震荡",
+        "risk_level": "中",
+        "up_ratio": 51.2,
+        "limit_up_count": 42,
+        "limit_down_count": 7,
+    }
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        _log_run_summary(
+            logger,
+            "close",
+            market,
+            tmp_path / "report.xlsx",
+            tmp_path / "index.html",
+        )
+
+    assert "任务全部完成，准备退出并交还后续发布流程" in caplog.text
+    assert "阶段=盘后正式报告" in caplog.text
 
 
 def test_parse_args_supports_init_date_offline_and_snapshot() -> None:

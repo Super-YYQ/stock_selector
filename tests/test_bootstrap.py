@@ -12,6 +12,7 @@ from src.run_lock import RUN_LOCK_TOKEN_ENV
 def test_bootstrap_holds_one_lock_across_daily_and_publish(
     tmp_path: Path,
     monkeypatch,
+    capsys,
 ) -> None:
     lock_path = tmp_path / "run_daily.lock"
     python = tmp_path / "python"
@@ -48,6 +49,10 @@ def test_bootstrap_holds_one_lock_across_daily_and_publish(
     assert all(call["cwd"] == tmp_path for call in calls)
     assert all(call["token"] == call["owner_token"] for call in calls)
     assert not lock_path.exists()
+    status = capsys.readouterr().err
+    assert "主任务已退出，退出码：0" in status
+    assert "主任务成功，开始发布 GitHub Pages 静态报告" in status
+    assert "静态报告发布任务已退出，退出码：0" in status
 
 
 def test_bootstrap_skips_publish_when_latest_is_provisional(

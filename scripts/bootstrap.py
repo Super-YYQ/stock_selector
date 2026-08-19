@@ -22,6 +22,13 @@ RUN_LOCK_PATH = ROOT / "data" / "run_daily.lock"
 LATEST_REPORT_PATH = "site/data/latest.json"
 
 
+def _status(message: str) -> None:
+    """Write orchestration status to stderr so a blocked stdout cannot stall a run."""
+
+    sys.stderr.write(f"{message}\n")
+    sys.stderr.flush()
+
+
 def venv_python() -> Path:
     return VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
@@ -35,12 +42,12 @@ def ensure_environment() -> Path:
         raise RuntimeError("需要 Python 3.11 或更高版本，推荐 Python 3.12")
     python = venv_python()
     if not python.exists():
-        print("[1/2] 正在创建本地 Python 环境 .venv")
+        _status("[1/2] 正在创建本地 Python 环境 .venv")
         subprocess.run([sys.executable, "-m", "venv", str(VENV)], check=True)
     marker = VENV / ".requirements.sha256"
     current_hash = requirements_hash()
     if not marker.exists() or marker.read_text(encoding="ascii").strip() != current_hash:
-        print("[2/2] 正在安装或更新依赖")
+        _status("[2/2] 正在安装或更新依赖")
         subprocess.run([str(python), "-m", "pip", "install", "-r", str(REQUIREMENTS)], cwd=ROOT, check=True)
         marker.write_text(current_hash, encoding="ascii")
     return python
@@ -91,16 +98,22 @@ def _execute(args: argparse.Namespace, child_env: dict[str, str] | None = None) 
             command.extend(["--date", args.date])
         command.extend(["--snapshot", args.snapshot])
 
+    _status(f"开始执行主任务：{' '.join(command)}")
     result = subprocess.run(command, cwd=ROOT, env=child_env)
+    _status(f"主任务已退出，退出码：{result.returncode}")
     if result.returncode == 0 and args.publish and args.command in {"daily", "init"}:
         if _latest_report_is_provisional():
-            print("跳过发布：当前为盘中临时快照（intraday），不作为正式报告发布")
+            _status("跳过发布：当前为盘中临时快照（intraday），不作为正式报告发布")
             return result.returncode
+        _status("主任务成功，开始发布 GitHub Pages 静态报告")
         result = subprocess.run(
             [str(python), str(ROOT / "scripts" / "publish_pages.py")],
             cwd=ROOT,
             env=child_env,
         )
+        _status(f"静态报告发布任务已退出，退出码：{result.returncode}")
+    elif result.returncode == 0 and args.command in {"daily", "init"}:
+        _status("主任务成功；本次未启用自动发布")
     return result.returncode
 
 
