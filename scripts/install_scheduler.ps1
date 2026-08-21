@@ -25,7 +25,12 @@ function New-WeekdayTrigger([string]$Value) {
     return New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At $AtTime
 }
 
-$Action = New-ScheduledTaskAction -Execute $PythonLauncher -Argument $Arguments -WorkingDirectory $Root
+# Wrap the task in cmd.exe with output redirection so an interactive console
+# (QuickEdit selection mode) can never block the pipeline on stdout/stderr writes.
+$LogDir = Join-Path $Root "logs"
+$LogFile = Join-Path $LogDir "bootstrap.log"
+$InnerCommand = 'if not exist "{0}" mkdir "{0}" & "{1}" {2} >> "{3}" 2>&1' -f $LogDir, $PythonLauncher, $Arguments, $LogFile
+$Action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument ('/c "{0}"' -f $InnerCommand) -WorkingDirectory $Root
 $Triggers = @()
 if ($Midday) {
     $Triggers += New-WeekdayTrigger $MiddayTime
@@ -36,6 +41,7 @@ $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Triggers -Settings $Settings -Principal $Principal -Description "A-share intraday snapshot and post-market selector on weekdays" -Force | Out-Null
 Write-Host "Scheduled task installed: $TaskName (weekdays at $Time)" -ForegroundColor Green
+Write-Host "Task output is redirected to $LogFile" -ForegroundColor Yellow
 if ($Midday) {
     Write-Host "Intraday snapshot enabled: weekdays at $MiddayTime" -ForegroundColor Cyan
 }

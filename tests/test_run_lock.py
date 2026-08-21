@@ -53,6 +53,18 @@ def test_dead_process_lock_is_recovered(tmp_path: Path) -> None:
     assert not path.exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific PID probe")
+def test_windows_pid_probe_never_sends_console_signals(monkeypatch) -> None:
+    from src import run_lock
+
+    def forbidden_kill(*args: object, **kwargs: object) -> None:
+        raise AssertionError("os.kill must not be used to probe PIDs on Windows")
+
+    monkeypatch.setattr(run_lock.os, "kill", forbidden_kill)
+    assert run_lock._pid_is_running(os.getpid()) is True
+    assert run_lock._pid_is_running(99_999_999) is False
+
+
 def test_lock_excludes_a_second_python_process(tmp_path: Path) -> None:
     path = tmp_path / "run_daily.lock"
     script = (

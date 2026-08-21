@@ -17,6 +17,17 @@ def test_windows_scheduler_scripts_are_powershell5_ascii_safe() -> None:
         (root / "scripts" / name).read_bytes().decode("ascii")
 
 
+def test_install_scheduler_redirects_task_output_to_log_file() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "install_scheduler.ps1").read_text(encoding="ascii")
+
+    assert "cmd.exe" in script
+    assert "bootstrap.log" in script
+    assert ">>" in script
+    assert "2>&1" in script
+    assert 'New-ScheduledTaskAction -Execute "$env:SystemRoot\\System32\\cmd.exe"' in script
+
+
 def test_scheduler_status_does_not_treat_permission_errors_as_missing() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts" / "scheduler_status.ps1").read_text(encoding="utf-8")
