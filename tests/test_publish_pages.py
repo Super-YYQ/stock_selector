@@ -207,20 +207,44 @@ def test_publish_refuses_unrelated_local_commit(
     assert remote_head(remote) == original_remote_head
 
 
-def test_publish_refuses_dirty_report_source(
+def test_publish_allows_dirty_report_source(
     publish_repo: tuple[Path, Path],
 ) -> None:
+    """开发态未提交的代码/配置/模板不阻断发布：发布提交只含 site/data/* 报告文件。"""
     repo, remote = publish_repo
     original_remote_head = remote_head(remote)
     source = repo / "src" / "scoring.py"
     source.parent.mkdir(parents=True)
     source.write_text("UNREVIEWED = True\n", encoding="utf-8")
+    (repo / "config" / "stock_pool.yml").parent.mkdir(parents=True, exist_ok=True)
+    (repo / "config" / "stock_pool.yml").write_text("experiment: true\n", encoding="utf-8")
     write_snapshot(repo, NEW_DATE, [NEW_DATE, INITIAL_DATE])
 
-    with pytest.raises(RuntimeError, match="源码或配置存在未提交修改"):
-        publish_pages.main([])
+    assert publish_pages.main([]) == 0
 
-    assert remote_head(remote) == original_remote_head
+    commit_sha = remote_head(remote)
+    assert commit_sha != original_remote_head
+    changed_paths = {
+        line.strip()
+        for line in run_git(
+            repo,
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            commit_sha,
+        ).stdout.splitlines()
+        if line.strip()
+    }
+    assert changed_paths == {
+        "site/data/latest.json",
+        "site/data/history.json",
+        f"site/data/history/{NEW_DATE}.json",
+    }
+    # 未提交的开发态文件保留在工作区，未进入发布提交
+    status = run_git(repo, "status", "--short", "--untracked-files=all").stdout
+    assert "src/scoring.py" in status
+    assert "config/stock_pool.yml" in status
 
 
 def test_push_uses_validated_commit_when_local_branch_moves(

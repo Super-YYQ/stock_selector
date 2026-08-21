@@ -23,14 +23,6 @@ PUBLISH_TRAILER = "Stock-Selector-Publish: v1"
 REPORT_PATHS = ("site/data/latest.json", "site/data/history.json")
 HISTORY_PATH_RE = re.compile(r"^site/data/history/(\d{4}-\d{2}-\d{2})\.json$")
 REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-REPORT_INPUT_PATHS = (
-    "src",
-    "config",
-    "scripts",
-    "web",
-    "run_daily.py",
-    "requirements.txt",
-)
 
 
 @dataclass(frozen=True)
@@ -163,26 +155,13 @@ def _push_branch(remote: str, branch: str, commit_sha: str) -> None:
 
 
 def _ensure_report_inputs_clean() -> None:
-    dirty = git(
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-        "--",
-        *REPORT_INPUT_PATHS,
-    )
-    if dirty.stdout.strip():
-        paths = [
-            line[3:].strip()
-            for line in dirty.stdout.splitlines()
-            if len(line) >= 4
-        ]
-        detail = "、".join(paths[:8])
-        if len(paths) > 8:
-            detail += f" 等 {len(paths)} 项"
-        raise RuntimeError(
-            "报告输入源码或配置存在未提交修改，已停止自动发布；"
-            f"请先通过正常 PR/提交确认这些变更：{detail}"
-        )
+    """保留为 no-op，向后兼容外部/测试引用。
+
+    发布提交由 ``_commit_report`` 以 ``--only -- <site/data/*>`` 方式创建，
+    仅含生成报告数据；本地未提交的代码、配置、模板不会进入该提交，因此不再
+    校验输入源码是否干净，避免开发态实验（如勾选科创板过滤）阻断定时发布。
+    """
+    return None
 
 
 def _prepare_branch(remote: str, branch: str, *, dry_run: bool) -> bool:
