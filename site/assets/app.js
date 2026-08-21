@@ -149,6 +149,78 @@
     byId("custom-results-table").innerHTML = '<tbody><tr><td class="empty-state">暂无单策略筛选结果</td></tr></tbody>';
   }
 
+  function filterFocusRows(rows) {
+    var query = state.focusSearch.trim().toLowerCase();
+    return (rows || []).filter(function (row) {
+      if (state.focusBoard && String(row.market_board || row.industry || "") !== state.focusBoard) return false;
+      if (!query) return true;
+      return [row.code, row.name, row.industry, row.sector, row.market_board, row.concepts].some(function (value) {
+        return String(value || "").toLowerCase().indexOf(query) >= 0;
+      });
+    });
+  }
+
+  function filterWatchlistRows(rows) {
+    var query = state.search.trim().toLowerCase();
+    return (rows || []).filter(function (row) {
+      var boardMatches = !state.board || String(row.market_board || row.industry || "") === state.board;
+      if (!boardMatches) return false;
+      if (!query) return true;
+      return [row.code, row.name, row.industry, row.sector, row.market_board, row.concepts,
+        row.reason_tags, row.matched_strategies
+      ].some(function (value) {
+        return String(value || "").toLowerCase().indexOf(query) >= 0;
+      });
+    });
+  }
+
+  function filterCustomRows(source) {
+    var catalog = source.catalog || [];
+    var results = source.results || [];
+    var activeFormula = catalog.find(function (item) { return item.screen_key === state.activeCustomKey; }) || catalog[0];
+    if (!activeFormula) return [];
+    var query = state.customSearch.trim().toLowerCase();
+    return results.filter(function (row) {
+      return String(row.screen_key || "") === String(activeFormula.screen_key || "");
+    }).filter(function (row) {
+      if (!query) return true;
+      return [row.code, row.name, row.industry, row.sector, row.market_board, row.concepts, row.single_strategy_reason].some(function (value) {
+        return String(value || "").toLowerCase().indexOf(query) >= 0;
+      });
+    });
+  }
+
+  function customActiveName() {
+    var source = singleStrategySource();
+    var catalog = source.catalog || [];
+    var activeFormula = catalog.find(function (item) { return item.screen_key === state.activeCustomKey; }) || catalog[0];
+    return (activeFormula && activeFormula.name) || "单策略筛选";
+  }
+
+  function publishThsScopes() {
+    var sink = window.__thsExport__ && typeof window.__thsExport__.setScopes === "function"
+      ? window.__thsExport__.setScopes : null;
+    if (!sink) return;
+    var payload = state.payload || {};
+    function toStock(row, index) {
+      return { rank: row.single_strategy_rank || row.rank || (index + 1),
+               code: String(row.code || "").padStart(6, "0"), name: row.name || "" };
+    }
+    var focusRows = filterFocusRows(payload.top10 || []).map(toStock);
+    var watchRows = filterWatchlistRows(payload[state.listName] || []).map(toStock);
+    var customRows = filterCustomRows(singleStrategySource()).map(toStock);
+    sink({
+      reportDate: payload.report_date || "",
+      views: {
+        overview: { listKey: "focus", label: "重点关注", rows: focusRows },
+        watchlist: { listKey: state.listName === "top10" ? "top10" : "top50",
+                     label: state.listName === "top10" ? "重点关注" : "观察名单", rows: watchRows },
+        custom: { listKey: state.activeCustomKey, label: customActiveName(), rows: customRows }
+      },
+      currentView: document.body.dataset.activeView || "overview"
+    });
+  }
+
   function renderAll() {
     var payload = state.payload || {};
     var market = payload.market || {};
@@ -193,6 +265,7 @@
     renderPerformance(payload.strategy_performance || []);
     renderSystem();
     icons();
+    publishThsScopes();
   }
 
   function renderMarketGuidance(market, sectors) {
@@ -652,6 +725,7 @@
       button.addEventListener("click", function () {
         state.activeCustomKey = button.dataset.customFormula;
         renderCustomStrategies();
+        publishThsScopes();
       });
     });
     all("[data-screen-enabled]").forEach(function (input) {
@@ -716,6 +790,7 @@
       state.customStrategies = saved[1];
       renderCustomStrategies();
       renderStrategies();
+      publishThsScopes();
       toast("策略启用状态已保存，下次任务生效");
     } catch (error) {
       toast("保存失败：" + error.message);
@@ -1057,6 +1132,7 @@
       if (name === "custom") centerActiveFormula();
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
+    publishThsScopes();
   }
 
   function bindPointerAura() {
@@ -1129,27 +1205,33 @@
         state.listName = button.dataset.list;
         all("[data-list]").forEach(function (item) { item.classList.toggle("active", item === button); });
         renderWatchlist();
+        publishThsScopes();
       });
     });
     byId("stock-search").addEventListener("input", function (event) {
       state.search = event.target.value;
       renderWatchlist();
+      publishThsScopes();
     });
     byId("board-filter").addEventListener("change", function (event) {
       state.board = event.target.value;
       renderWatchlist();
+      publishThsScopes();
     });
     byId("focus-search").addEventListener("input", function (event) {
       state.focusSearch = event.target.value;
       renderFocus((state.payload && state.payload.top10) || []);
+      publishThsScopes();
     });
     byId("focus-board-filter").addEventListener("change", function (event) {
       state.focusBoard = event.target.value;
       renderFocus((state.payload && state.payload.top10) || []);
+      publishThsScopes();
     });
     byId("custom-search").addEventListener("input", function (event) {
       state.customSearch = event.target.value;
       renderCustomStrategies();
+      publishThsScopes();
     });
     byId("refresh-button").addEventListener("click", function () {
       state.schedulerDirty = false;
