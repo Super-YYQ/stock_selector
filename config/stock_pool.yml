@@ -1,12 +1,12 @@
 stock_pool:
   min_list_days: 120
-  min_price: 3
-  min_avg_amount_20d: 100000000
+  min_price: 3.0
+  min_avg_amount_20d: 100000000.0
   exclude_st: true
   exclude_suspended: true
   exclude_boards:
-    - 北交所
-
+  - 科创板
+  - 北交所
 risk:
   max_pct_chg_5d: 30
   max_pct_chg_10d: 45
