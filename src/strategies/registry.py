@@ -114,6 +114,7 @@ def strategy_catalog() -> list[dict[str, object]]:
             "family": strategy.family,
             "description": strategy.description,
             "score": strategy.score,
+            "origin": "custom" if strategy.key == "volume_breakout_pullback" else "builtin",
         }
         for strategy in STRATEGY_CLASSES
     ]
@@ -284,6 +285,7 @@ def build_strategy_screener_data(
                 "enabled": enabled_item,
                 "matched_count": matched_count,
                 "result_count": min(matched_count, max_results),
+                "max_results": int(max_results),
                 "status": "active" if enabled_item else "disabled",
                 "formula_summary": item["description"],
             }
@@ -320,3 +322,39 @@ def build_strategy_screener_data(
         if column in selected.columns
     ]
     return catalog, selected[columns].reset_index(drop=True)
+
+
+SINGLE_SCREENER_POOL_SIZE = 200
+
+
+def build_single_screener_pool(
+    daily: pd.DataFrame,
+    report_date: str,
+    factors: pd.DataFrame,
+    ranked: pd.DataFrame,
+    parameters: dict[str, dict[str, object]] | None = None,
+    max_scoring_hit_rate: float = 1.0,
+    min_selectivity_multiplier: float = 1.0,
+    enabled: list[str] | None = None,
+) -> tuple[list[dict[str, object]], pd.DataFrame]:
+    """评估全部内置策略，每策略预计算 Top 200 命中池，供单策略筛选页即时截断。
+
+    与观察名单（strategies.enabled）解耦：无论观察名单勾选了哪些策略，
+    这里始终评估全部策略，前端按 single_screener 配置本地过滤。
+    """
+    all_keys = list(STRATEGY_REGISTRY)
+    evaluation = evaluate_enabled_strategies(
+        daily,
+        report_date,
+        factors,
+        all_keys,
+        parameters,
+        max_scoring_hit_rate,
+        min_selectivity_multiplier,
+    )
+    return build_strategy_screener_data(
+        evaluation.hits,
+        ranked,
+        enabled if enabled is not None else all_keys,
+        SINGLE_SCREENER_POOL_SIZE,
+    )

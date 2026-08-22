@@ -61,6 +61,11 @@ class CustomStrategyUpdate(BaseModel):
     enabled: list[str]
 
 
+class SingleScreenerUpdate(BaseModel):
+    enabled: list[str]
+    top_per_strategy: int
+
+
 class SchedulerUpdate(BaseModel):
     enabled: bool
     time: str = Field(default="17:30", pattern="^(?:[01]\\d|2[0-3]):[0-5]\\d$")
@@ -281,6 +286,61 @@ def update_strategies(update: StrategyUpdate) -> dict[str, Any]:
     return strategies()
 
 
+@app.get("/api/single-screener")
+def single_screener() -> dict[str, Any]:
+    config = _config()
+    catalog = strategy_catalog()
+    reported: dict[str, dict[str, Any]] = {}
+    results: list[dict[str, Any]] = []
+    payload_path = _latest_payload_path()
+    if payload_path.exists():
+        try:
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            reported = {
+                str(item.get("key", "")): item
+                for item in payload.get("strategy_screeners", [])
+                if item.get("key")
+            }
+            results = payload.get("strategy_screener_results", []) or []
+        except (OSError, json.JSONDecodeError):
+            LOGGER.warning("单策略筛选读取最新报告失败，继续返回配置目录")
+    enabled_set = set(config.single_screener.enabled)
+    for item in catalog:
+        snapshot = reported.get(str(item["key"]), {})
+        for key in ("matched_count", "result_count", "max_results", "status"):
+            if key in snapshot:
+                item[key] = snapshot[key]
+        item["enabled"] = item["key"] in enabled_set
+    return {
+        "catalog": catalog,
+        "enabled": config.single_screener.enabled,
+        "top_per_strategy": config.single_screener.top_per_strategy,
+        "results": results,
+    }
+
+
+@app.put("/api/single-screener")
+def update_single_screener(update: SingleScreenerUpdate) -> dict[str, Any]:
+    unknown = sorted(set(update.enabled) - set(STRATEGY_REGISTRY))
+    if unknown:
+        raise HTTPException(status_code=422, detail="未知策略: " + ", ".join(unknown))
+    if not 1 <= update.top_per_strategy <= 200:
+        raise HTTPException(status_code=422, detail="top_per_strategy 必须在 1-200 之间")
+
+    path = ROOT / "config" / "strategy.yml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    raw.setdefault("single_screener", {})
+    raw["single_screener"]["enabled"] = list(dict.fromkeys(update.enabled))
+    raw["single_screener"]["top_per_strategy"] = update.top_per_strategy
+    temporary = path.with_suffix(".yml.tmp")
+    temporary.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+    return single_screener()
+
+
 @app.get("/api/custom-strategies")
 def custom_strategies() -> dict[str, Any]:
     try:
@@ -304,7 +364,7 @@ def custom_strategies() -> dict[str, Any]:
     catalog = public_formula_catalog(formulas)
     for item in catalog:
         snapshot = reported.get(item["key"], {})
-        for key in ("matched_count", "status", "error"):
+        for key in ("matched_count", "result_count", "max_results", "status", "error"):
             if key in snapshot:
                 item[key] = snapshot[key]
     return {"catalog": catalog, "results": results}

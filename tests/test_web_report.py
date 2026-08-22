@@ -62,3 +62,46 @@ def test_build_report_payload_marks_intraday_snapshot_as_provisional() -> None:
     assert payload["snapshot_type"] == "intraday"
     assert payload["is_provisional"] is True
     assert "盘中" in payload["disclaimer"]
+
+
+def test_build_report_payload_prefers_single_screener_pool_with_origin() -> None:
+    pool_catalog = [
+        {"key": "ma_volume", "name": "均线放量", "matched_count": 5, "result_count": 5, "origin": "builtin"}
+    ]
+    pool_results = pd.DataFrame(
+        [{"single_strategy_key": "ma_volume", "single_strategy_rank": 1, "code": "000001"}]
+    )
+    legacy_catalog = [
+        {"key": "ma_volume", "name": "均线放量", "matched_count": 2, "origin": "builtin"}
+    ]
+
+    payload = build_report_payload(
+        "2026-06-22",
+        {"market_score": 5},
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {"stock_coverage": 1},
+        strategy_screeners=legacy_catalog,
+        strategy_screener_results=pd.DataFrame(),
+        single_screener_catalog=pool_catalog,
+        single_screener_results=pool_results,
+    )
+
+    assert payload["strategy_screeners"] == pool_catalog
+    assert payload["strategy_screeners"][0]["origin"] == "builtin"
+    assert payload["strategy_screener_results"][0]["code"] == "000001"
+
+    fallback = build_report_payload(
+        "2026-06-22",
+        {"market_score": 5},
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {"stock_coverage": 1},
+        strategy_screeners=legacy_catalog,
+    )
+
+    assert fallback["strategy_screeners"] == legacy_catalog

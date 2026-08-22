@@ -163,6 +163,10 @@ def public_formula_catalog(
 ) -> list[dict[str, Any]]:
     counts = counts or {}
     errors = errors or {}
+    counts_with_limits = {
+        formula["key"]: min(int(counts.get(formula["key"], 0)), formula["max_results"])
+        for formula in formulas
+    }
     return [
         {
             "key": formula["key"],
@@ -173,6 +177,8 @@ def public_formula_catalog(
             "condition_count": len(formula["conditions"]),
             "formula_summary": formula["formula_summary"],
             "matched_count": int(counts.get(formula["key"], 0)),
+            "result_count": int(counts_with_limits.get(formula["key"], 0)),
+            "max_results": int(formula["max_results"]),
             "status": "error" if formula["key"] in errors else ("active" if formula["enabled"] else "disabled"),
             "error": errors.get(formula["key"], ""),
         }

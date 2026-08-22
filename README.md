@@ -112,7 +112,7 @@ powershell -ExecutionPolicy Bypass -File scripts/install_scheduler.ps1 -Time "18
 
 统一展示全部内置策略和 `config/custom_strategies.yml` 中的安全公式。每个策略使用相同大小的卡片，可分别查看当日命中总数、独立排名、股票明细和命中原因。
 
-单策略页面只负责独立观察，不改变综合评分；启用状态保存后从下一次任务生效。
+单策略页面只负责独立观察，不改变综合评分。它拥有独立于观察名单的配置（`config/strategy.yml > single_screener`，含 `enabled` 与 `top_per_strategy`，上限 200），由面板「单策略筛选」页的「保存筛选配置」按钮维护；每日任务会预计算全部 11 个内置策略的 Top 200 命中池，因此修改配置后展示立即生效，无需重跑任务。策略卡片标注来源：自建（`volume_breakout_pullback`）、内置或公式。
 
 ### 同花顺识股导出
 

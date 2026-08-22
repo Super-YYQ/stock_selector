@@ -6,6 +6,7 @@
     status: null,
     scheduler: null,
     strategies: null,
+    singleScreener: null,
     customStrategies: null,
     pool: null,
     mode: "local",
@@ -107,9 +108,10 @@
         state.mode = "static";
         state.ready = false;
         state.status = null;
-        state.strategies = null;
-        state.customStrategies = null;
-        state.pool = null;
+      state.strategies = null;
+      state.singleScreener = null;
+      state.customStrategies = null;
+      state.pool = null;
         document.body.classList.add("static-mode");
       } catch (staticError) {
         setConnection("error", "暂无报告数据");
@@ -127,13 +129,15 @@
       request("/api/strategies"),
       request("/api/pool-config"),
       request("/api/custom-strategies"),
-      request("/api/scheduler")
+      request("/api/scheduler"),
+      request("/api/single-screener")
     ]);
     if (results[0].status === "fulfilled") state.status = results[0].value;
     if (results[1].status === "fulfilled") state.strategies = results[1].value;
     if (results[2].status === "fulfilled") state.pool = results[2].value;
     if (results[3].status === "fulfilled") state.customStrategies = results[3].value;
     if (results[4].status === "fulfilled") state.scheduler = results[4].value;
+    if (results[5].status === "fulfilled") state.singleScreener = results[5].value;
   }
 
   function setConnection(kind, label) {
@@ -569,9 +573,18 @@
     var reportedBuiltins = payload.strategy_screeners || [];
     var reportedByKey = {};
     reportedBuiltins.forEach(function (item) { reportedByKey[String(item.key || "")] = item; });
+    var screener = state.singleScreener;
     var builtinCatalog = reportedBuiltins;
-    if (state.strategies && state.strategies.catalog) {
-      var enabledBuiltins = new Set(state.strategies.enabled || []);
+    var enabledBuiltins = null;
+    if (screener && screener.catalog) {
+      enabledBuiltins = new Set(screener.enabled || []);
+      builtinCatalog = screener.catalog.map(function (item) {
+        return Object.assign({}, reportedByKey[String(item.key || "")] || {}, item, {
+          enabled: enabledBuiltins.has(item.key)
+        });
+      });
+    } else if (state.strategies && state.strategies.catalog) {
+      enabledBuiltins = new Set(state.strategies.enabled || []);
       builtinCatalog = state.strategies.catalog.map(function (item) {
         return Object.assign({}, reportedByKey[String(item.key || "")] || {}, item, {
           enabled: enabledBuiltins.has(item.key)
@@ -582,9 +595,15 @@
       return Object.assign({}, item, {
         screen_key: "builtin:" + String(item.key || ""),
         source_type: "builtin",
+        origin: item.origin || "builtin",
         formula_summary: item.formula_summary || item.description || "--"
       });
     });
+    if (enabledBuiltins !== null) {
+      builtinCatalog = builtinCatalog.filter(function (item) { return item.enabled; });
+    }
+    var topN = Number(screener && screener.top_per_strategy);
+    if (!Number.isFinite(topN) || topN < 1) topN = 0;
 
     var customSource = state.customStrategies || {
       catalog: payload.custom_strategies || [],
@@ -596,7 +615,10 @@
         source_type: "formula"
       });
     });
-    var builtinResults = (payload.strategy_screener_results || []).map(function (row) {
+    var builtinResults = (payload.strategy_screener_results || []).filter(function (row) {
+      if (!topN) return true;
+      return Number(row.single_strategy_rank) <= topN;
+    }).map(function (row) {
       return Object.assign({}, row, {
         screen_key: "builtin:" + String(row.single_strategy_key || "")
       });
@@ -690,8 +712,15 @@
       return leftIndex - rightIndex;
     });
     byId("custom-formula-count").textContent = catalog.length + " 个";
+    if (state.singleScreener) {
+      var topInput = byId("screener-top-n");
+      if (topInput && document.activeElement !== topInput) {
+        topInput.value = String(state.singleScreener.top_per_strategy || 20);
+      }
+    }
     if (!catalog.length) {
-      byId("custom-formula-list").innerHTML = '<div class="empty-state">暂无可用策略</div>';
+      byId("custom-formula-list").innerHTML = '<div class="empty-state">' +
+        (state.singleScreener ? "暂无启用策略" : "暂无可用策略") + '</div>';
       byId("custom-result-title").textContent = "单策略筛选结果";
       byId("custom-result-description").textContent = "--";
       byId("custom-formula-summary").textContent = "暂无策略定义";
@@ -708,14 +737,23 @@
     byId("custom-formula-list").innerHTML = catalog.map(function (item, index) {
       var active = item.screen_key === state.activeCustomKey;
       var disabled = !item.enabled;
-      var count = Number(item.matched_count || 0);
+      var matchedCount = Number(item.matched_count || 0);
+      var resultCount = Number(item.result_count);
+      if (!Number.isFinite(resultCount)) resultCount = matchedCount;
+      var countLabel = item.status === "error" ? "配置异常"
+        : (matchedCount > resultCount
+            ? matchedCount + " 命中 · 展示前 " + resultCount
+            : resultCount + " 只命中");
+      var originLabel = item.source_type === "formula" ? "公式"
+        : (item.origin === "custom" ? "自建" : "内置");
       return '<article class="formula-item ' + (active ? "active " : "") + (disabled ? "disabled" : "") + '">' +
         '<button type="button" data-custom-formula="' + escapeHtml(item.screen_key) + '">' +
         '<span class="formula-order">' + String(index + 1).padStart(2, "0") + '</span>' +
         '<span class="formula-icon"><i data-lucide="' + strategyIcon(item.key, item.source_type) + '"></i></span>' +
         '<h3>' + escapeHtml(item.name) +
-        '</h3><p>' + escapeHtml(item.description || item.formula_summary || "--") + '</p><small>' +
-        (item.status === "error" ? "配置异常" : count + " 只命中") + '</small></button>' +
+        '<span class="formula-origin">' + escapeHtml(originLabel) + '</span></h3>' +
+        '<p>' + escapeHtml(item.description || item.formula_summary || "--") + '</p><small>' +
+        countLabel + '</small></button>' +
         '<label class="switch local-only" title="启用或停用"><input type="checkbox" data-screen-enabled="' +
         escapeHtml(item.key) + '" data-screen-type="' + escapeHtml(item.source_type) + '" ' +
         (item.enabled ? "checked" : "") + '><span></span></label></article>';
@@ -747,14 +785,19 @@
     });
     var matchedCount = Number(activeFormula.matched_count);
     if (!Number.isFinite(matchedCount)) matchedCount = strategyRows.length;
+    var resultCount = Number(activeFormula.result_count);
+    if (!Number.isFinite(resultCount)) resultCount = matchedCount;
+    var screenerTopN = state.singleScreener ? Number(state.singleScreener.top_per_strategy) : NaN;
+    if (Number.isFinite(screenerTopN) && screenerTopN >= 1) resultCount = Math.min(resultCount, screenerTopN);
+    var truncated = matchedCount > resultCount;
     var summary = activeFormula.error || activeFormula.formula_summary || activeFormula.description || "--";
-    if (matchedCount > strategyRows.length) {
-      summary += "；当前展示综合分靠前的 " + strategyRows.length + " 只";
+    if (truncated) {
+      summary += "；全市场命中 " + matchedCount + " 只，当前按综合分展示前 " + resultCount + " 只";
     }
     byId("custom-result-title").textContent = activeFormula.name || "单策略筛选结果";
     byId("custom-result-description").textContent = activeFormula.description || "--";
     byId("custom-formula-summary").textContent = summary;
-    animateInteger(byId("custom-match-count"), matchedCount);
+    animateInteger(byId("custom-match-count"), truncated ? matchedCount : strategyRows.length);
     byId("custom-results-table").innerHTML = tableHtml(customColumns, rows);
     bindDetailButtons(byId("custom-results-table"));
     icons();
@@ -767,18 +810,20 @@
     var formulaEnabled = all('[data-screen-enabled][data-screen-type="formula"]:checked').map(function (input) {
       return input.dataset.screenEnabled;
     });
-    if (!builtinEnabled.length) {
-      toast("至少保留一个启用策略");
+    var topInput = byId("screener-top-n");
+    var topN = Number(topInput && topInput.value);
+    if (!Number.isFinite(topN) || topN < 1 || topN > 200) {
+      toast("每策略展示条数需在 1-200 之间");
       return;
     }
     var button = byId("save-custom-strategies-button");
     button.disabled = true;
     try {
       var saved = await Promise.all([
-        request("/api/strategies", {
+        request("/api/single-screener", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: builtinEnabled, profile: "custom" })
+          body: JSON.stringify({ enabled: builtinEnabled, top_per_strategy: topN })
         }),
         request("/api/custom-strategies", {
           method: "PUT",
@@ -786,12 +831,10 @@
           body: JSON.stringify({ enabled: formulaEnabled })
         })
       ]);
-      state.strategies = saved[0];
+      state.singleScreener = saved[0];
       state.customStrategies = saved[1];
       renderCustomStrategies();
-      renderStrategies();
-      publishThsScopes();
-      toast("策略启用状态已保存，下次任务生效");
+      toast("筛选配置已保存，展示即时生效");
     } catch (error) {
       toast("保存失败：" + error.message);
     } finally {

@@ -154,7 +154,10 @@
             <aside class="formula-index">
               <div class="surface-heading"><div><span class="section-label">独立选股</span><h2>策略目录</h2></div><span class="muted" id="custom-formula-count">--</span></div>
               <div class="formula-list" id="custom-formula-list"></div>
-              <button class="secondary-button local-only" id="save-custom-strategies-button"><i data-lucide="save"></i><span>保存启用状态</span></button>
+              <div class="local-only screener-config-bar">
+                <label class="screener-topn"><span>每策略展示</span><input type="number" id="screener-top-n" min="1" max="200" step="1" value="20"><span>条</span></label>
+                <button class="secondary-button" id="save-custom-strategies-button"><i data-lucide="save"></i><span>保存筛选配置</span></button>
+              </div>
             </aside>
             <section class="custom-results">
               <div class="custom-result-header">

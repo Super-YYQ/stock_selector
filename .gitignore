@@ -14,3 +14,4 @@ reports/
 data/*.db-*
 .env
 artifacts/
+.pytest_tmp/

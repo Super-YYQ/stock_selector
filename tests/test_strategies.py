@@ -1,7 +1,10 @@
 import pandas as pd
 
 from src.strategies.registry import (
+    SINGLE_SCREENER_POOL_SIZE,
+    STRATEGY_REGISTRY,
     build_strategy_screener_data,
+    build_single_screener_pool,
     evaluate_enabled_strategies,
     run_enabled_strategies,
     strategy_catalog,
@@ -180,6 +183,81 @@ def test_strategy_screener_data_keeps_each_strategy_result_separate() -> None:
     }
     assert results.groupby("single_strategy_key")["single_strategy_rank"].min().eq(1).all()
     assert results["single_strategy_reason"].ne("").all()
+
+
+def test_strategy_catalog_marks_origin() -> None:
+    catalog = strategy_catalog()
+    by_key = {item["key"]: item for item in catalog}
+
+    assert by_key["volume_breakout_pullback"]["origin"] == "custom"
+    assert all(
+        item["origin"] == "builtin"
+        for key, item in by_key.items()
+        if key != "volume_breakout_pullback"
+    )
+
+
+def _multi_code_daily(codes: list[str]) -> pd.DataFrame:
+    rows = []
+    for day in range(1, 62):
+        for index, code in enumerate(codes):
+            close = 10 + day * 0.1 + index * 0.001
+            row = {
+                "code": code,
+                "trade_date": f"2026-05-{day:02d}",
+                "open": close - 0.2,
+                "high": close + 0.2,
+                "low": close - 0.5,
+                "close": close,
+                "amount": 100,
+                "pct_chg": 1,
+            }
+            if day == 61:
+                row.update(close=17 + index * 0.001, high=17.2, amount=320, pct_chg=6)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_build_single_screener_pool_evaluates_all_strategies() -> None:
+    daily = _strategy_daily()
+    factors = pd.DataFrame(
+        [
+            {"code": "000001", "name": "强势股", "rps20": 92, "rps60": 88},
+            {"code": "000002", "name": "弱势股", "rps20": 20, "rps60": 30},
+        ]
+    )
+    ranked = factors.assign(total_score=[88.0, 20.0], amount_ratio=[3.2, 1.0])
+
+    catalog, results = build_single_screener_pool(daily, "2026-05-61", factors, ranked)
+
+    assert {item["key"] for item in catalog} == set(STRATEGY_REGISTRY)
+    assert len(catalog) == 11
+    assert all("origin" in item for item in catalog)
+    by_key = {item["key"]: item for item in catalog}
+    assert by_key["volume_breakout_pullback"]["origin"] == "custom"
+    assert by_key["ma_volume"]["max_results"] == SINGLE_SCREENER_POOL_SIZE
+    # 默认（不传 enabled）时全部策略视为启用，与观察名单解耦
+    assert all(item["enabled"] for item in catalog)
+    enabled_only = build_single_screener_pool(
+        daily, "2026-05-61", factors, ranked, enabled=[]
+    )[0]
+    assert all(not item["enabled"] for item in enabled_only)
+    assert not results.empty
+
+
+def test_single_screener_pool_respects_pool_size() -> None:
+    codes = [f"{index:06d}" for index in range(1, 251)]
+    daily = _multi_code_daily(codes)
+    factors = pd.DataFrame({"code": codes, "rps20": 92, "rps60": 88})
+    ranked = factors.assign(total_score=88.0, amount_ratio=3.2)
+
+    catalog, results = build_single_screener_pool(daily, "2026-05-61", factors, ranked)
+
+    by_key = {item["key"]: item for item in catalog}
+    assert by_key["ma_volume"]["matched_count"] == len(codes)
+    assert by_key["ma_volume"]["result_count"] == SINGLE_SCREENER_POOL_SIZE
+    per_strategy = results.groupby("single_strategy_key").size()
+    assert (per_strategy <= SINGLE_SCREENER_POOL_SIZE).all()
 
 
 def test_document_pattern_scores_breakout_pullback_ready() -> None:

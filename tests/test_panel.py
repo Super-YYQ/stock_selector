@@ -112,6 +112,52 @@ def test_panel_reads_report_status_and_updates_strategy_config(tmp_path: Path, m
     assert "科创板" in persisted
 
 
+def test_single_screener_get_returns_config(tmp_path: Path, monkeypatch) -> None:
+    _project(tmp_path)
+    monkeypatch.setattr(panel, "ROOT", tmp_path)
+
+    screener = panel.single_screener()
+
+    assert screener["top_per_strategy"] == 20
+    assert len(screener["catalog"]) == 11
+    assert {item["key"] for item in screener["catalog"]} >= {"ma_volume", "sector_leader"}
+    assert all("origin" in item for item in screener["catalog"])
+    # 默认全部启用（配置文件未写 single_screener 小节）
+    assert set(screener["enabled"]) == set(panel.STRATEGY_REGISTRY)
+    enabled_by_key = {item["key"]: item["enabled"] for item in screener["catalog"]}
+    assert enabled_by_key["ma_volume"] is True
+
+
+def test_single_screener_put_validates_and_persists(tmp_path: Path, monkeypatch) -> None:
+    _project(tmp_path)
+    monkeypatch.setattr(panel, "ROOT", tmp_path)
+
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as unknown_exc:
+        panel.update_single_screener(
+            panel.SingleScreenerUpdate(enabled=["not_a_strategy"], top_per_strategy=20)
+        )
+    assert unknown_exc.value.status_code == 422
+    with pytest.raises(HTTPException) as range_exc:
+        panel.update_single_screener(
+            panel.SingleScreenerUpdate(enabled=["ma_volume"], top_per_strategy=201)
+        )
+    assert range_exc.value.status_code == 422
+
+    # 允许为空（与观察名单不同，单策略筛选不影响评分）
+    updated = panel.update_single_screener(
+        panel.SingleScreenerUpdate(enabled=[], top_per_strategy=50)
+    )
+    assert updated["enabled"] == []
+    assert updated["top_per_strategy"] == 50
+    persisted = (tmp_path / "config" / "strategy.yml").read_text(encoding="utf-8")
+    assert "single_screener" in persisted
+    # 观察名单配置不被单策略筛选写入影响
+    assert "ma_volume" in persisted
+
+
 def test_panel_health_and_existing_instance_detection(monkeypatch) -> None:
     monkeypatch.setattr(
         panel,

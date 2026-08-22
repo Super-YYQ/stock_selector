@@ -109,6 +109,14 @@ class StrategyConfig:
 
 
 @dataclass(frozen=True)
+class SingleScreenerConfig:
+    # 单策略筛选页专用，独立于观察名单的 strategies.enabled；
+    # 允许为空（页面显示「暂无启用策略」，不影响评分）。
+    enabled: list[str] = field(default_factory=lambda: list(DEFAULT_ENABLED_STRATEGIES))
+    top_per_strategy: int = 20
+
+
+@dataclass(frozen=True)
 class StockPoolConfig:
     min_list_days: int = 120
     min_price: float = 3
@@ -137,6 +145,7 @@ class AppConfig:
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     strategies: StrategyConfig = field(default_factory=StrategyConfig)
+    single_screener: SingleScreenerConfig = field(default_factory=SingleScreenerConfig)
     stock_pool: StockPoolConfig = field(default_factory=StockPoolConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
 
@@ -232,6 +241,15 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("strategies.min_selectivity_multiplier must be in (0, 1]")
     if not isinstance(config.strategies.parameters, dict):
         raise ValueError("strategies.parameters must be a mapping")
+    if config.single_screener.top_per_strategy < 1:
+        raise ValueError("single_screener.top_per_strategy must be greater than 0")
+    if config.single_screener.top_per_strategy > 200:
+        raise ValueError("single_screener.top_per_strategy must be <= 200")
+    unknown_screener = set(config.single_screener.enabled) - set(DEFAULT_ENABLED_STRATEGIES)
+    if unknown_screener:
+        raise ValueError(
+            "single_screener.enabled contains unknown strategies: " + ", ".join(sorted(unknown_screener))
+        )
 
 
 def load_config(config_dir: str | Path = "config") -> AppConfig:
@@ -247,6 +265,7 @@ def load_config(config_dir: str | Path = "config") -> AppConfig:
         scoring=ScoringConfig(**_section(strategy, "scoring")),
         performance=PerformanceConfig(**_section(strategy, "performance")),
         strategies=StrategyConfig(**_section(strategy, "strategies")),
+        single_screener=SingleScreenerConfig(**_section(strategy, "single_screener")),
         stock_pool=StockPoolConfig(**_section(stock_pool, "stock_pool")),
         risk=RiskConfig(**_section(stock_pool, "risk")),
     )

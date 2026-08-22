@@ -86,3 +86,19 @@ strategies:
       platform_hold_ratio: 0.96
       trend_near_high_ratio: 0.80
       max_distance_ma20: 22
+
+single_screener:
+  enabled:
+    - ma_volume
+    - turtle_breakout
+    - rps_breakout
+    - pullback_stable
+    - limit_up_shakeout
+    - volatility_squeeze
+    - trend_pullback_reversal
+    - low_volatility_rps
+    - first_pullback
+    - volume_breakout_pullback
+    - sector_leader
+  top_per_strategy: 20
+

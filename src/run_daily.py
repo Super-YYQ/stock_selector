@@ -34,6 +34,7 @@ from src.scoring import build_ranked_results, select_report_candidates
 from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
 from src.strategies.registry import (
     build_strategy_screener_data,
+    build_single_screener_pool,
     evaluate_enabled_strategies,
 )
 from src.stock_character import calculate_stock_character_scores
@@ -941,6 +942,16 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
             config.strategies.enabled,
             config.strategies.top_per_strategy,
         )
+        single_screener_catalog, single_screener_results = build_single_screener_pool(
+            stock_daily,
+            report_date,
+            factors,
+            ranked,
+            config.strategies.parameters,
+            config.strategies.max_scoring_hit_rate,
+            config.strategies.min_selectivity_multiplier,
+            enabled=config.single_screener.enabled,
+        )
         custom_strategies: list[dict[str, Any]] = []
         custom_strategy_results = pd.DataFrame()
         try:
@@ -998,6 +1009,8 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
             health,
             strategy_screeners=strategy_screeners,
             strategy_screener_results=strategy_screener_results,
+            single_screener_catalog=single_screener_catalog,
+            single_screener_results=single_screener_results,
             custom_strategies=custom_strategies,
             custom_strategy_results=custom_strategy_results,
             snapshot_type=snapshot_type,
