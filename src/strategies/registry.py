@@ -6,7 +6,10 @@ from dataclasses import dataclass
 import pandas as pd
 
 from src.strategies.base import build_strategy_features
+from src.strategies.box_breakout import BoxBreakoutStrategy
+from src.strategies.double_bottom import DoubleBottomStrategy
 from src.strategies.first_pullback import FirstPullbackStrategy
+from src.strategies.ma_convergence_breakout import MaConvergenceBreakoutStrategy
 from src.strategies.limit_up_shakeout import LimitUpShakeoutStrategy
 from src.strategies.low_volatility_rps import LowVolatilityRpsStrategy
 from src.strategies.ma_volume import MaVolumeStrategy
@@ -31,6 +34,9 @@ STRATEGY_CLASSES = [
     FirstPullbackStrategy,
     VolumeBreakoutPullbackStrategy,
     SectorLeaderStrategy,
+    MaConvergenceBreakoutStrategy,
+    BoxBreakoutStrategy,
+    DoubleBottomStrategy,
 ]
 STRATEGY_REGISTRY = {strategy.key: strategy for strategy in STRATEGY_CLASSES}
 STRATEGY_HIT_COLUMNS = [

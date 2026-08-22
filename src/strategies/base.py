@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from src.indicators import limit_up_threshold
@@ -43,7 +44,7 @@ def build_strategy_history(
         return history
 
     grouped = history.groupby("code", sort=False)
-    for window in (5, 10, 20, 60):
+    for window in (5, 10, 13, 20, 34, 55, 60):
         history[f"ma{window}"] = grouped["close"].transform(
             lambda value, size=window: value.rolling(size, min_periods=1).mean()
         )
@@ -60,6 +61,28 @@ def build_strategy_history(
     history["low_20"] = grouped["low"].transform(lambda value: value.rolling(20, min_periods=1).min())
     history["prior_high_20"] = grouped["high"].transform(
         lambda value: value.shift(1).rolling(20, min_periods=10).max()
+    )
+    history["prior_high_12"] = grouped["high"].transform(
+        lambda value: value.shift(1).rolling(12, min_periods=6).max()
+    )
+    convergence_span = history[["ma13", "ma34", "ma55"]]
+    convergence_floor = convergence_span.min(axis=1).replace(0, pd.NA)
+    history["ma_deviation"] = (
+        (convergence_span.max(axis=1) - convergence_floor) / convergence_floor
+    ).mul(100)
+    history["ma_deviation_10"] = grouped["ma_deviation"].shift(10)
+    history["ma_deviation_19"] = grouped["ma_deviation"].shift(19)
+    log_high_open = np.log(history["high"] / history["open"].replace(0, pd.NA))
+    history["high_open_20"] = (
+        log_high_open.groupby(history["code"], sort=False)
+        .transform(lambda value: value.rolling(20, min_periods=10).mean())
+        .mul(100)
+    )
+    log_close_low = np.log(history["close"] / history["low"].replace(0, pd.NA))
+    history["close_low_20"] = (
+        log_close_low.groupby(history["code"], sort=False)
+        .transform(lambda value: value.rolling(20, min_periods=10).mean())
+        .mul(100)
     )
     history["return_5d"] = grouped["close"].transform(lambda value: value.pct_change(5).mul(100))
     history["return_10d"] = grouped["close"].transform(lambda value: value.pct_change(10).mul(100))

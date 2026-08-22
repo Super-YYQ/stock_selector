@@ -58,3 +58,59 @@ strategies:
     operator: gte
     value: 70
     label: RPS20不低于70
+- key: bias_pullback_stabilize
+  name: 乖离回踩企稳
+  description: 5日内温和回调至20日线上方，当日收回振幅中位上方且未放量
+  enabled: true
+  match: all
+  max_results: 30
+  sort_by: total_score
+  sort_direction: desc
+  conditions:
+  - field: return_5d
+    operator: between
+    min: -10
+    max: 0
+    label: 近5日处于回调区间
+  - field: distance_ma20
+    operator: between
+    min: 0
+    max: 8
+    label: 仍站在20日线上方且乖离可控
+  - field: close_position
+    operator: gte
+    value: 0.5
+    label: 当日收盘收在振幅中位上方
+  - field: amount_ratio
+    operator: lte
+    value: 1.3
+    label: 回调未伴随放量出货
+  - field: rps60
+    operator: gte
+    value: 65
+    label: RPS60不低于65保持中期强度
+- key: intraday_structure_momentum
+  name: 日内结构强势
+  description: 20日平均日内冲高幅度领先且收盘远离最低价受到压制，动量居前
+  enabled: true
+  match: all
+  max_results: 30
+  sort_by: total_score
+  sort_direction: desc
+  conditions:
+  - field: high_open_20
+    operator: gte
+    value: 1.2
+    label: 20日平均日内冲高幅度不低于1.2%
+  - field: close_low_20
+    operator: lte
+    value: 2.5
+    label: 20日平均收盘距最低价不超过2.5%
+  - field: rps20
+    operator: gte
+    value: 70
+    label: RPS20不低于70
+  - field: amount_ratio
+    operator: gte
+    value: 0.8
+    label: 成交额未显著萎缩

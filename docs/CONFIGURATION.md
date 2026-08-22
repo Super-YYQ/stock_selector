@@ -164,6 +164,11 @@ Windows 本机的工作日定时任务在面板 **运行状态 → 定时执行*
 | `volume_breakout_pullback` | 放量突破缩量承接 |
 | `limit_up_shakeout` | 涨停洗盘回踩 |
 | `sector_leader` | 板块共振领涨 |
+| `ma_convergence_breakout` | 均线粘合突破 |
+| `box_breakout` | 箱体突破 |
+| `double_bottom` | 双底颈线突破 |
+
+> 新增的三个策略默认只在单策略筛选页启用（已在 `single_screener.enabled` 中），观察名单的 `strategies.enabled` 未包含它们，勾选后才会参与综合评分。
 
 `volume_breakout_pullback` 可调参数：
 

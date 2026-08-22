@@ -23,6 +23,9 @@ DEFAULT_ENABLED_STRATEGIES = [
     "first_pullback",
     "volume_breakout_pullback",
     "sector_leader",
+    "ma_convergence_breakout",
+    "box_breakout",
+    "double_bottom",
 ]
 
 

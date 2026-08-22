@@ -85,3 +85,77 @@ def test_custom_formula_enabled_update_rejects_unknown_keys(tmp_path: Path) -> N
         assert "未知自定义策略" in str(exc)
     else:
         raise AssertionError("unknown custom formula should be rejected")
+
+
+def _structure_daily() -> pd.DataFrame:
+    dates = pd.date_range("2026-01-01", periods=25, freq="D").strftime("%Y-%m-%d")
+    rows = []
+    # 强势结构：开盘平开冲高、收盘贴近最高价；弱势结构：高开幅度小、收盘远离最低价
+    shapes = {
+        "000001": {"open": 1.0, "high": 1.03, "low": 1.02, "close": 1.028},
+        "000002": {"open": 1.0, "high": 1.002, "low": 0.98, "close": 0.995},
+    }
+    for code, shape in shapes.items():
+        for index, trade_date in enumerate(dates):
+            base = 10.0 + index * 0.02
+            rows.append(
+                {
+                    "code": code,
+                    "trade_date": trade_date,
+                    "open": base * shape["open"],
+                    "high": base * shape["high"],
+                    "low": base * shape["low"],
+                    "close": base * shape["close"],
+                    "amount": 200_000_000,
+                    "pct_chg": 0.5,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_custom_formula_supports_intraday_structure_fields(tmp_path: Path) -> None:
+    config = tmp_path / "custom_strategies.yml"
+    config.write_text(
+        """
+version: 1
+strategies:
+  - key: structure_test
+    name: 结构因子测试
+    enabled: true
+    match: all
+    max_results: 10
+    sort_by: total_score
+    conditions:
+      - field: high_open_20
+        operator: gte
+        value: 1.5
+        label: 20日平均日内冲高幅度足够
+      - field: close_low_20
+        operator: lte
+        value: 1.0
+        label: 20日平均收盘贴近最低价受控
+      - field: return_5d
+        operator: between
+        min: -5
+        max: 5
+        label: 近5日涨跌幅温和
+      - field: close_position
+        operator: gte
+        value: 0.5
+        label: 收盘位于当日振幅中位上方
+""".strip(),
+        encoding="utf-8",
+    )
+    daily = _structure_daily()
+    ranked = pd.DataFrame(
+        [
+            {"code": "000001", "name": "强势结构", "total_score": 88},
+            {"code": "000002", "name": "弱势结构", "total_score": 70},
+        ]
+    )
+    report_date = daily["trade_date"].iloc[-1]
+
+    catalog, results = evaluate_custom_formulas(daily, report_date, ranked, config)
+
+    assert catalog[0]["matched_count"] == 1
+    assert results["code"].tolist() == ["000001"]

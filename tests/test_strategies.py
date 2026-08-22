@@ -137,7 +137,7 @@ def test_sector_leader_rejects_market_board_industry_fallback() -> None:
 def test_strategy_catalog_contains_all_strategy_families() -> None:
     catalog = strategy_catalog()
 
-    assert len(catalog) == 11
+    assert len(catalog) == 14
     assert {item["key"] for item in catalog} >= {
         "volatility_squeeze",
         "trend_pullback_reversal",
@@ -145,8 +145,11 @@ def test_strategy_catalog_contains_all_strategy_families() -> None:
         "first_pullback",
         "volume_breakout_pullback",
         "sector_leader",
+        "ma_convergence_breakout",
+        "box_breakout",
+        "double_bottom",
     }
-    assert {item["family"] for item in catalog} >= {"breakout", "trend", "pullback", "event", "sector"}
+    assert {item["family"] for item in catalog} >= {"breakout", "trend", "pullback", "event", "sector", "pattern"}
 
 
 def test_strategy_screener_data_keeps_each_strategy_result_separate() -> None:
@@ -231,7 +234,7 @@ def test_build_single_screener_pool_evaluates_all_strategies() -> None:
     catalog, results = build_single_screener_pool(daily, "2026-05-61", factors, ranked)
 
     assert {item["key"] for item in catalog} == set(STRATEGY_REGISTRY)
-    assert len(catalog) == 11
+    assert len(catalog) == 14
     assert all("origin" in item for item in catalog)
     by_key = {item["key"]: item for item in catalog}
     assert by_key["volume_breakout_pullback"]["origin"] == "custom"
@@ -258,6 +261,119 @@ def test_single_screener_pool_respects_pool_size() -> None:
     assert by_key["ma_volume"]["result_count"] == SINGLE_SCREENER_POOL_SIZE
     per_strategy = results.groupby("single_strategy_key").size()
     assert (per_strategy <= SINGLE_SCREENER_POOL_SIZE).all()
+
+
+def test_box_breakout_detects_converged_box() -> None:
+    rows = []
+    for day in range(1, 62):
+        level = 10.0 if day % 2 == 0 else 10.9
+        last = day == 61
+        close = 10.85 if last else level
+        rows.append(
+            {
+                "code": "000001",
+                "trade_date": f"2026-05-{day:02d}",
+                "open": level - 0.05,
+                "high": level + 0.1,
+                "low": level - 0.15,
+                "close": close,
+                "amount": 100,
+                "pct_chg": 0,
+            }
+        )
+    factors = pd.DataFrame({"code": ["000001"]})
+
+    evaluation = evaluate_enabled_strategies(pd.DataFrame(rows), "2026-05-61", factors, ["box_breakout"])
+
+    assert evaluation.hits["code"].tolist() == ["000001"]
+    assert evaluation.hits.iloc[0]["strategy_family"] == "pattern"
+
+
+def _double_bottom_daily() -> pd.DataFrame:
+    rows = []
+
+    def add(day: int, level: float) -> None:
+        rows.append(
+            {
+                "code": "000001",
+                "trade_date": f"2026-05-{day + 1:02d}",
+                "open": level,
+                "high": level + 0.1,
+                "low": level - 0.1,
+                "close": level,
+                "amount": 100,
+                "pct_chg": 0,
+            }
+        )
+
+    for day in range(15):  # 12 一路回落到 9
+        add(day, 12 - 3 * day / 14)
+    for day in range(10):  # 反弹到 12
+        add(15 + day, 9 + 3 * day / 9)
+    for day in range(10):  # 二次回落到 9.1
+        add(25 + day, 12 - 2.9 * day / 9)
+    for day in range(25):  # 缓涨并在末端突破颈线
+        add(35 + day, 9.1 + 3.5 * day / 24)
+    return pd.DataFrame(rows)
+
+
+def test_double_bottom_breaks_neckline_after_second_trough() -> None:
+    factors = pd.DataFrame({"code": ["000001"]})
+
+    evaluation = evaluate_enabled_strategies(
+        _double_bottom_daily(), "2026-05-60", factors, ["double_bottom"]
+    )
+
+    assert evaluation.hits["code"].tolist() == ["000001"]
+
+
+def test_double_bottom_ignores_deeper_second_bottom() -> None:
+    daily = _double_bottom_daily()
+    daily.loc[daily.index[-26], ["open", "high", "low", "close"]] = [7.0, 7.1, 6.9, 7.0]
+    factors = pd.DataFrame({"code": ["000001"]})
+
+    evaluation = evaluate_enabled_strategies(daily, "2026-05-60", factors, ["double_bottom"])
+
+    assert evaluation.hits.empty
+
+
+def test_ma_convergence_breakout_requires_prior_convergence() -> None:
+    def build(jump: bool) -> pd.DataFrame:
+        rows = []
+        for day in range(1, 57):
+            rows.append(
+                {
+                    "code": "000001",
+                    "trade_date": f"2026-05-{day:02d}",
+                    "open": 10.0,
+                    "high": 10.1,
+                    "low": 9.9,
+                    "close": 10.0,
+                    "amount": 100,
+                    "pct_chg": 0,
+                }
+            )
+        if jump:
+            rows.append(
+                {
+                    "code": "000001",
+                    "trade_date": "2026-05-57",
+                    "open": 10.2,
+                    "high": 10.6,
+                    "low": 10.1,
+                    "close": 10.5,
+                    "amount": 150,
+                    "pct_chg": 5,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    factors = pd.DataFrame({"code": ["000001"]})
+    hit = evaluate_enabled_strategies(build(True), "2026-05-57", factors, ["ma_convergence_breakout"])
+    miss = evaluate_enabled_strategies(build(False), "2026-05-57", factors, ["ma_convergence_breakout"])
+
+    assert hit.hits["code"].tolist() == ["000001"]
+    assert miss.hits.empty
 
 
 def test_document_pattern_scores_breakout_pullback_ready() -> None:

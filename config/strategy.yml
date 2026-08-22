@@ -93,4 +93,7 @@ single_screener:
   - low_volatility_rps
   - first_pullback
   - sector_leader
+  - ma_convergence_breakout
+  - box_breakout
+  - double_bottom
   top_per_strategy: 200

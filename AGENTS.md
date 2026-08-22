@@ -70,7 +70,7 @@ All strategies subclass `src.strategies.base.Strategy` and define:
 
 Use the shared frame from `build_strategy_features`. Avoid recalculating moving averages, volatility or breakouts inside each strategy. Register new strategies in `src/strategies/registry.py`, assign a family and add focused tests.
 
-Current families: `breakout`, `trend`, `pullback`, `event`, `sector`.
+Current families: `breakout`, `trend`, `pullback`, `event`, `sector`, `pattern`.
 
 Custom chart-derived rules live in `config/custom_strategies.yml`. Add indicator fields to the shared feature builder only when a requested formula cannot be expressed with existing fields. Formula failures must be isolated so the main daily report still completes.
 

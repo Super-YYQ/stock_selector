@@ -119,7 +119,7 @@ def test_single_screener_get_returns_config(tmp_path: Path, monkeypatch) -> None
     screener = panel.single_screener()
 
     assert screener["top_per_strategy"] == 20
-    assert len(screener["catalog"]) == 11
+    assert len(screener["catalog"]) == 14
     assert {item["key"] for item in screener["catalog"]} >= {"ma_volume", "sector_leader"}
     assert all("origin" in item for item in screener["catalog"])
     # 默认全部启用（配置文件未写 single_screener 小节）

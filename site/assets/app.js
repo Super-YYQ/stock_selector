@@ -651,7 +651,10 @@
       low_volatility_rps: "shield-check",
       first_pullback: "corner-down-left",
       volume_breakout_pullback: "target",
-      sector_leader: "network"
+      sector_leader: "network",
+      ma_convergence_breakout: "git-merge",
+      box_breakout: "square",
+      double_bottom: "waves"
     })[key] || "activity";
   }
 
