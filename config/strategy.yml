@@ -64,6 +64,9 @@ strategies:
   - first_pullback
   - volume_breakout_pullback
   - sector_leader
+  - ma_convergence_breakout
+  - box_breakout
+  - double_bottom
   profile: balanced
   strategy_score_weight: 15
   top_per_strategy: 20
