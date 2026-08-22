@@ -1,61 +1,60 @@
 version: 1
 strategies:
-  - key: volume_rps_resonance
-    name: 量价 RPS 共振
-    description: 价格接近阶段高点，成交额放大且相对强度领先
-    enabled: true
-    match: all
-    max_results: 30
-    sort_by: total_score
-    sort_direction: desc
-    conditions:
-      - field: close
-        operator: gte
-        compare_field: high_20
-        multiplier: 0.98
-        label: 收盘价位于20日高点附近
-      - field: amount_ratio
-        operator: gte
-        value: 1.2
-        label: 成交额不低于20日均额的1.2倍
-      - field: rps20
-        operator: gte
-        value: 80
-        label: RPS20不低于80
-      - field: distance_ma20
-        operator: between
-        min: 0
-        max: 12
-        label: 价格位于20日线上方且乖离可控
-
-  - key: quiet_trend_pullback
-    name: 缩量趋势回踩
-    description: 中期趋势未破，缩量回到均线附近并保持相对强度
-    enabled: true
-    match: all
-    max_results: 30
-    sort_by: total_score
-    sort_direction: desc
-    conditions:
-      - field: close
-        operator: gte
-        compare_field: ma20
-        label: 收盘价仍在20日线上方
-      - field: amount_ratio
-        operator: lte
-        value: 0.9
-        label: 成交额低于20日均额的0.9倍
-      - field: distance_ma20
-        operator: between
-        min: 0
-        max: 6
-        label: 距20日线不超过6%
-      - field: pct_chg
-        operator: between
-        min: -2
-        max: 3
-        label: 当日涨跌幅处于温和区间
-      - field: rps20
-        operator: gte
-        value: 70
-        label: RPS20不低于70
+- key: volume_rps_resonance
+  name: 量价 RPS 共振
+  description: 价格接近阶段高点，成交额放大且相对强度领先
+  enabled: true
+  match: all
+  max_results: 30
+  sort_by: total_score
+  sort_direction: desc
+  conditions:
+  - field: close
+    operator: gte
+    compare_field: high_20
+    multiplier: 0.98
+    label: 收盘价位于20日高点附近
+  - field: amount_ratio
+    operator: gte
+    value: 1.2
+    label: 成交额不低于20日均额的1.2倍
+  - field: rps20
+    operator: gte
+    value: 80
+    label: RPS20不低于80
+  - field: distance_ma20
+    operator: between
+    min: 0
+    max: 12
+    label: 价格位于20日线上方且乖离可控
+- key: quiet_trend_pullback
+  name: 缩量趋势回踩
+  description: 中期趋势未破，缩量回到均线附近并保持相对强度
+  enabled: true
+  match: all
+  max_results: 30
+  sort_by: total_score
+  sort_direction: desc
+  conditions:
+  - field: close
+    operator: gte
+    compare_field: ma20
+    label: 收盘价仍在20日线上方
+  - field: amount_ratio
+    operator: lte
+    value: 0.9
+    label: 成交额低于20日均额的0.9倍
+  - field: distance_ma20
+    operator: between
+    min: 0
+    max: 6
+    label: 距20日线不超过6%
+  - field: pct_chg
+    operator: between
+    min: -2
+    max: 3
+    label: 当日涨跌幅处于温和区间
+  - field: rps20
+    operator: gte
+    value: 70
+    label: RPS20不低于70

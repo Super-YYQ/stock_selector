@@ -1,12 +1,12 @@
 data:
   provider: tdx
   database: data/stock.db
-  start_date: "2023-01-01"
+  start_date: '2023-01-01'
   tdx_parallel_workers: 4
   tdx_parallel_chunk_size: 50
   tdx_timeout_seconds: 3
   tdx_query_retries: 3
-  init_min_stock_coverage: 0.90
+  init_min_stock_coverage: 0.9
   min_latest_stock_coverage: 0.98
   init_min_daily_rows: 100000
   init_min_index_count: 3
@@ -15,7 +15,6 @@ data:
   baostock_reconnect_interval: 200
   baostock_parallel_workers: 2
   baostock_parallel_chunk_size: 20
-
 report:
   top_observe: 50
   top_focus: 10
@@ -26,12 +25,10 @@ report:
   min_focus_score: 60
   max_per_industry: 5
   max_per_market_board: 20
-
 panel:
   host: 127.0.0.1
   port: 8765
   open_browser: true
-
 features:
   enable_sector_score: true
   enable_rps: true
@@ -40,7 +37,6 @@ features:
   context_top_n: 50
   context_cache_days: 7
   context_workers: 4
-
 scoring:
   sector_score_weight: 25
   stock_character_weight: 20
@@ -48,57 +44,53 @@ scoring:
   relative_strength_weight: 15
   market_adjust_weight: 10
   risk_penalty_max: 20
-  factor_percentile_blend: 0.50
-
+  factor_percentile_blend: 0.5
 performance:
   benchmark_index_code: sh000001
   entry_cost_bps: 8
   exit_cost_bps: 13
   exclude_untradable_entry: true
   exclude_price_jump_anomaly: true
-
 strategies:
   enabled:
-    - ma_volume
-    - turtle_breakout
-    - rps_breakout
-    - pullback_stable
-    - limit_up_shakeout
-    - volatility_squeeze
-    - trend_pullback_reversal
-    - low_volatility_rps
-    - first_pullback
-    - volume_breakout_pullback
-    - sector_leader
+  - ma_volume
+  - turtle_breakout
+  - rps_breakout
+  - pullback_stable
+  - limit_up_shakeout
+  - volatility_squeeze
+  - trend_pullback_reversal
+  - low_volatility_rps
+  - first_pullback
+  - volume_breakout_pullback
+  - sector_leader
   profile: balanced
   strategy_score_weight: 15
   top_per_strategy: 20
-  max_scoring_hit_rate: 0.20
+  max_scoring_hit_rate: 0.2
   min_selectivity_multiplier: 0.25
   parameters:
     volume_breakout_pullback:
       min_score: 51
       ignition_min_age: 1
       ignition_max_age: 12
-      volume_contraction_max: 0.90
-      deep_volume_contraction: 0.60
+      volume_contraction_max: 0.9
+      deep_volume_contraction: 0.6
       trigger_low_hold_ratio: 0.97
       platform_hold_ratio: 0.96
-      trend_near_high_ratio: 0.80
+      trend_near_high_ratio: 0.8
       max_distance_ma20: 22
-
 single_screener:
   enabled:
-    - ma_volume
-    - turtle_breakout
-    - rps_breakout
-    - pullback_stable
-    - limit_up_shakeout
-    - volatility_squeeze
-    - trend_pullback_reversal
-    - low_volatility_rps
-    - first_pullback
-    - volume_breakout_pullback
-    - sector_leader
-  top_per_strategy: 20
-
+  - ma_volume
+  - rps_breakout
+  - turtle_breakout
+  - pullback_stable
+  - limit_up_shakeout
+  - volatility_squeeze
+  - volume_breakout_pullback
+  - trend_pullback_reversal
+  - low_volatility_rps
+  - first_pullback
+  - sector_leader
+  top_per_strategy: 200
