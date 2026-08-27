@@ -39,6 +39,14 @@ STRATEGY_CLASSES = [
     DoubleBottomStrategy,
 ]
 STRATEGY_REGISTRY = {strategy.key: strategy for strategy in STRATEGY_CLASSES}
+
+# Columns computed on the strategy feature frame that the main pipeline also
+# needs as risk-penalty inputs (calculate_risk_penalties reads them on `factors`).
+# evaluate_enabled_strategies carries them onto the aggregate so the existing
+# `factors.merge(aggregate)` wires them through; without this they stayed inside
+# the internal feature frame and risk_filter saw zeros.
+RISK_INPUT_COLUMNS = ["return_5d", "return_10d", "distance_ma20", "volatility_20d"]
+
 STRATEGY_HIT_COLUMNS = [
     "code",
     "strategy_key",
@@ -135,6 +143,8 @@ def _empty_strategy_result(codes: pd.DataFrame) -> pd.DataFrame:
     result["strategy_family_count"] = 0
     result["strategy_families"] = ""
     result["strategy_details"] = "[]"
+    for column in RISK_INPUT_COLUMNS:
+        result[column] = pd.NA
     return result
 
 
@@ -170,6 +180,32 @@ def _aggregate_code_hits(group: pd.DataFrame) -> pd.Series:
             "strategy_details": json.dumps(details, ensure_ascii=False),
         }
     )
+
+
+def _merge_risk_inputs(result: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+    """Carry risk-penalty inputs from the strategy feature frame onto the aggregate.
+
+    ``return_5d``/``return_10d``/``distance_ma20``/``volatility_20d`` are computed
+    on the shared feature frame and never re-computed elsewhere, so without this
+    merge they would be missing from ``factors`` and ``calculate_risk_penalties``
+    would see zeros. Codes absent from the feature frame keep NA, which
+    ``risk_filter._number`` already coerces to 0.0.
+    """
+    available = [column for column in RISK_INPUT_COLUMNS if column in features.columns]
+    if not available or "code" not in features.columns:
+        for column in RISK_INPUT_COLUMNS:
+            if column not in result.columns:
+                result[column] = pd.NA
+        return result
+    supplement = features[["code", *available]].drop_duplicates("code")
+    existing = [column for column in available if column in result.columns]
+    result = result.drop(columns=existing, errors="ignore").merge(
+        supplement, on="code", how="left"
+    )
+    for column in RISK_INPUT_COLUMNS:
+        if column not in result.columns:
+            result[column] = pd.NA
+    return result
 
 
 def evaluate_enabled_strategies(
@@ -245,6 +281,7 @@ def evaluate_enabled_strategies(
         + "；"
         + result.loc[matched, "strategy_reason"]
     )
+    result = _merge_risk_inputs(result, features)
     return StrategyEvaluation(aggregate=result, hits=all_hits)
 
 

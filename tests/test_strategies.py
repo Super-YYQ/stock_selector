@@ -74,6 +74,57 @@ def test_run_enabled_strategies_aggregates_by_family() -> None:
     assert weak["strategy_score_raw"] == 0
 
 
+def test_aggregate_carries_risk_inputs_from_feature_frame() -> None:
+    # Regression: return_5d/return_10d/distance_ma20/volatility_20d are computed
+    # on the strategy feature frame and must be carried onto the aggregate so
+    # `factors.merge(aggregate)` wires them to calculate_risk_penalties. Before
+    # the fix they stayed inside the internal frame and risk_filter saw zeros.
+    daily = _strategy_daily()
+    factors = pd.DataFrame(
+        [
+            {"code": "000001", "rps20": 92, "rps60": 88},
+            {"code": "000002", "rps20": 20, "rps60": 30},
+        ]
+    )
+
+    evaluation = evaluate_enabled_strategies(
+        daily,
+        "2026-05-61",
+        factors,
+        ["ma_volume", "turtle_breakout", "rps_breakout"],
+    )
+    aggregate = evaluation.aggregate
+
+    for column in ("return_5d", "return_10d", "distance_ma20", "volatility_20d"):
+        assert column in aggregate.columns, f"aggregate 缺少风险输入列 {column}"
+
+    # 000001 trended up to close=17 → non-trivial distance above ma20 and returns;
+    # these must be real feature-derived values, not the 0.0 fallback.
+    strong = aggregate[aggregate["code"] == "000001"].iloc[0]
+    assert pd.notna(strong["distance_ma20"])
+    assert strong["distance_ma20"] > 0
+    assert pd.notna(strong["return_5d"])
+    assert strong["return_5d"] > 0
+    assert pd.notna(strong["volatility_20d"])
+
+    # A code with no strategy hit still receives the columns (NA here, since it
+    # exists in factors but the feature frame still computes its latest row).
+    flat = aggregate[aggregate["code"] == "000002"].iloc[0]
+    assert pd.notna(flat["distance_ma20"])
+
+
+def test_aggregate_risk_input_columns_present_when_no_hits() -> None:
+    # The no-hit / disabled branch must still expose the risk-input columns so
+    # downstream merges always find them; codes keep NA → risk_filter coerces to 0.
+    daily = _strategy_daily()
+    factors = pd.DataFrame([{"code": "000001"}])
+
+    result = run_enabled_strategies(daily, "2026-05-61", factors, [])
+
+    for column in ("return_5d", "return_10d", "distance_ma20", "volatility_20d"):
+        assert column in result.columns
+
+
 def test_run_enabled_strategies_returns_zero_when_disabled() -> None:
     daily = _strategy_daily()
     factors = pd.DataFrame([{"code": "000001"}])
