@@ -314,6 +314,44 @@ def test_single_screener_pool_respects_pool_size() -> None:
     assert (per_strategy <= SINGLE_SCREENER_POOL_SIZE).all()
 
 
+def test_single_screener_pool_excludes_codes_outside_ranked() -> None:
+    # Regression: strategy features are built from the full daily frame, so a
+    # strategy can hit a code that build_stock_pool filtered out (ST, halted,
+    # low liquidity...). Such a code is absent from `ranked`, so the old
+    # `selected.merge(details, on="code", how="left")` produced rows whose
+    # name/industry/total_score were all NaN — the UI showed a bare code with
+    # no name at the tail of each strategy. The pool must only keep codes that
+    # are actually in `ranked`.
+    #
+    # We call build_strategy_screener_data directly with a small max_results so
+    # the out-of-pool code can actually land inside the truncated top-N (with
+    # the 200-row pool it would just be pushed past the cutoff and hide the bug).
+    eligible_codes = [f"{index:06d}" for index in range(1, 11)]
+    daily = _multi_code_daily(eligible_codes + ["000999"])
+    factors = pd.DataFrame({"code": eligible_codes, "rps20": 92, "rps60": 88})
+    # `ranked` mirrors production: it carries the stock_basic-derived `name`
+    # column plus `total_score`/`amount_ratio`, but only for eligible codes.
+    ranked = factors.assign(
+        name=[f"股票{code}" for code in eligible_codes],
+        total_score=88.0,
+        amount_ratio=3.2,
+    )
+    evaluation = evaluate_enabled_strategies(
+        daily, "2026-05-61", factors, ["ma_volume"]
+    )
+
+    _catalog, results = build_strategy_screener_data(
+        evaluation.hits, ranked, ["ma_volume"], max_results=20
+    )
+
+    # 000999 trended up like the others (ma_volume hits it) but is not in
+    # `ranked` → it must not leak into the screener results.
+    assert "000999" not in set(results["code"])
+    # No surviving row should be missing the detail columns `ranked` supplies.
+    assert results["name"].notna().all()
+    assert results["total_score"].notna().all()
+
+
 def test_box_breakout_detects_converged_box() -> None:
     rows = []
     for day in range(1, 62):

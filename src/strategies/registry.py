@@ -347,6 +347,13 @@ def build_strategy_screener_data(
         }
     ).copy()
     details = ranked.drop_duplicates("code").copy()
+    # Strategy features are built from the full daily frame, so a strategy can
+    # hit a code that build_stock_pool filtered out (ST, halted, low liquidity,
+    # ...). Such a code is absent from `ranked`, so a left merge would leave its
+    # name/industry/total_score as NaN — the UI then shows a bare code with no
+    # name at the tail of each strategy. Drop those hits before merging so the
+    # screener only surfaces codes that are actually in the ranked pool.
+    selected = selected[selected["code"].isin(details["code"])]
     selected = selected.merge(details, on="code", how="left")
     selected = selected.sort_values(
         ["single_strategy_key", "single_strategy_score", "total_score"],
