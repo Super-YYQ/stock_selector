@@ -1,9 +1,24 @@
 import json
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 import src.scheduler as scheduler
+
+
+def _install_scheduler_inner_command_template() -> str:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "install_scheduler.ps1"
+    match = re.search(
+        r"^\$InnerCommand = '(.+)' -f ",
+        script.read_text(encoding="ascii"),
+        flags=re.M,
+    )
+    assert match is not None, "install_scheduler.ps1 must define $InnerCommand"
+    return match.group(1)
 
 
 def test_windows_scheduler_scripts_are_powershell5_ascii_safe() -> None:
@@ -26,6 +41,46 @@ def test_install_scheduler_redirects_task_output_to_log_file() -> None:
     assert ">>" in script
     assert "2>&1" in script
     assert 'New-ScheduledTaskAction -Execute "$env:SystemRoot\\System32\\cmd.exe"' in script
+
+
+def test_install_scheduler_does_not_bind_python_to_mkdir_if() -> None:
+    template = _install_scheduler_inner_command_template()
+
+    # cmd.exe parses `if cond command1 & command2` as `if cond (command1 & command2)`.
+    # When logs/ already exists the python process is skipped and the task still
+    # returns 0. Parentheses make mkdir optional and python unconditional.
+    assert template.startswith("(if not exist "), template
+    assert ') & "{1}"' in template
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe IF chaining is Windows-specific")
+def test_scheduler_cmd_wrapper_runs_python_when_logs_already_exist() -> None:
+    template = _install_scheduler_inner_command_template()
+    work = Path(__file__).resolve().parents[1] / ".pytest_tmp" / "scheduler_cmd_wrapper"
+    if work.exists():
+        for child in work.rglob("*"):
+            if child.is_file():
+                child.unlink()
+    logs = work / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    log_file = logs / "bootstrap.log"
+    marker = work / "ran.txt"
+    if marker.exists():
+        marker.unlink()
+    probe = work / "probe.py"
+    probe.write_text(
+        "from pathlib import Path\n"
+        f"Path(r'{marker.as_posix()}').write_text('ok', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    inner = template.format(str(logs), sys.executable, f'"{probe}"', str(log_file))
+    completed = subprocess.run(f'cmd.exe /c "{inner}"', cwd=work, check=False)
+
+    assert marker.exists(), (
+        "scheduled cmd wrapper skipped python because logs already existed "
+        f"(exit={completed.returncode}; inner={inner!r})"
+    )
 
 
 def test_scheduler_status_does_not_treat_permission_errors_as_missing() -> None:

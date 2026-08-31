@@ -29,7 +29,9 @@ function New-WeekdayTrigger([string]$Value) {
 # (QuickEdit selection mode) can never block the pipeline on stdout/stderr writes.
 $LogDir = Join-Path $Root "logs"
 $LogFile = Join-Path $LogDir "bootstrap.log"
-$InnerCommand = 'if not exist "{0}" mkdir "{0}" & "{1}" {2} >> "{3}" 2>&1' -f $LogDir, $PythonLauncher, $Arguments, $LogFile
+# Parentheses are required: cmd.exe parses `if cond a & b` as `if cond (a & b)`,
+# so a missing-logs check would otherwise skip python and still return 0.
+$InnerCommand = '(if not exist "{0}" mkdir "{0}") & "{1}" {2} >> "{3}" 2>&1' -f $LogDir, $PythonLauncher, $Arguments, $LogFile
 $Action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument ('/c "{0}"' -f $InnerCommand) -WorkingDirectory $Root
 $Triggers = @()
 if ($Midday) {
