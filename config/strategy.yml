@@ -99,4 +99,4 @@ single_screener:
   - ma_convergence_breakout
   - box_breakout
   - double_bottom
-  top_per_strategy: 200
+  top_per_strategy: 100
