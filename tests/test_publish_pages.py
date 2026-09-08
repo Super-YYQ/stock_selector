@@ -268,6 +268,35 @@ def test_push_uses_validated_commit_when_local_branch_moves(
     assert remote_head(remote) != moved_sha
 
 
+def test_publish_absorbs_untracked_orphan_history_from_failed_prior_publish(
+    publish_repo: tuple[Path, Path],
+) -> None:
+    """上一次发布因网络故障中途失败而遗留的未跟踪历史报告，应被本轮发布吸收。"""
+    repo, remote = publish_repo
+    orphan_date = "2026-07-20"
+    write_snapshot(repo, NEW_DATE, [NEW_DATE, INITIAL_DATE, orphan_date])
+    write_json(repo / f"site/data/history/{orphan_date}.json", report_payload(orphan_date))
+
+    assert publish_pages.main([]) == 0
+
+    commit_sha = remote_head(remote)
+    changed_paths = {
+        line.strip()
+        for line in run_git(
+            repo,
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            commit_sha,
+        ).stdout.splitlines()
+        if line.strip()
+    }
+    assert f"site/data/history/{orphan_date}.json" in changed_paths
+    assert f"site/data/history/{INITIAL_DATE}.json" not in changed_paths
+    assert run_git(repo, "status", "--short", "--", "site/data").stdout == ""
+
+
 def test_publish_refuses_modified_retained_history(
     publish_repo: tuple[Path, Path],
 ) -> None:

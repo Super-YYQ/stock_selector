@@ -331,11 +331,18 @@ def _load_report_snapshot() -> ReportSnapshot:
         raise RuntimeError("latest.json 与同日期历史报告内容不一致，已停止发布")
 
     upgraded_paths: list[str] = []
+    inherited_paths: list[str] = []
     for path in listed_paths:
         if path == current_history:
             continue
         if not _is_tracked(path):
-            raise RuntimeError(f"历史索引包含非本次生成的未跟踪文件: {path}")
+            # 上次发布若因瞬态故障（如网络中断）在提交前中途失败，本轮新生成的
+            # 历史报告会停留在未跟踪状态。它已在上面通过 JSON 与 report_date==
+            # 文件名校验，是合法的正式报告，直接纳入本次发布；否则一次失败的
+            # 发布会让后续所有自动发布永久卡死（见 site/data/history/*.json）。
+            if (ROOT / path).exists():
+                inherited_paths.append(path)
+            continue
         if _is_dirty_against_head(path):
             if _is_intraday_to_close_upgrade(path):
                 upgraded_paths.append(path)
@@ -353,7 +360,7 @@ def _load_report_snapshot() -> ReportSnapshot:
         if (ROOT / path).exists():
             raise RuntimeError(f"历史索引与磁盘文件不一致，未自动删除: {path}")
 
-    managed = (*REPORT_PATHS, current_history, *upgraded_paths, *stale_history)
+    managed = (*REPORT_PATHS, current_history, *upgraded_paths, *inherited_paths, *stale_history)
     return ReportSnapshot(report_date=report_date, managed_paths=tuple(dict.fromkeys(managed)))
 
 
