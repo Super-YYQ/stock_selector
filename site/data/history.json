@@ -1,5 +1,25 @@
 [
   {
+    "report_date": "2026-09-08",
+    "path": "data/history/2026-09-08.json"
+  },
+  {
+    "report_date": "2026-09-07",
+    "path": "data/history/2026-09-07.json"
+  },
+  {
+    "report_date": "2026-09-04",
+    "path": "data/history/2026-09-04.json"
+  },
+  {
+    "report_date": "2026-09-03",
+    "path": "data/history/2026-09-03.json"
+  },
+  {
+    "report_date": "2026-09-02",
+    "path": "data/history/2026-09-02.json"
+  },
+  {
     "report_date": "2026-09-01",
     "path": "data/history/2026-09-01.json"
   },
