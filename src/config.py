@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from src.tdx_fetcher import parse_tdx_hosts
+
 
 MARKET_BOARD_OPTIONS = ("沪市主板", "深市主板", "创业板", "科创板", "北交所", "其他")
 MARKET_BOARDS = set(MARKET_BOARD_OPTIONS)
@@ -38,6 +40,7 @@ class DataConfig:
     tdx_parallel_chunk_size: int = 50
     tdx_timeout_seconds: float = 3.0
     tdx_query_retries: int = 3
+    tdx_hosts: list[str] = field(default_factory=list)
     init_min_stock_coverage: float = 0.90
     min_latest_stock_coverage: float = 0.98
     init_min_daily_rows: int = 100000
@@ -181,6 +184,12 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("tdx_timeout_seconds must be greater than 0")
     if config.data.tdx_query_retries < 1:
         raise ValueError("tdx_query_retries must be greater than 0")
+    if not isinstance(config.data.tdx_hosts, list):
+        raise ValueError("tdx_hosts must be a list of ip:port strings")
+    try:
+        parse_tdx_hosts(config.data.tdx_hosts)
+    except ValueError as exc:
+        raise ValueError(f"tdx_hosts is invalid: {exc}") from exc
     if not 0 < config.data.init_min_stock_coverage <= 1:
         raise ValueError("init_min_stock_coverage must be in (0, 1]")
     if not 0 < config.data.min_latest_stock_coverage <= 1:

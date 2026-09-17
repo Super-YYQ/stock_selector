@@ -42,6 +42,7 @@ Main entry points:
 ## Non-Negotiable Behavior
 
 - Default provider is `tdx`, which needs no account login.
+- TDX hosts are probed for real bar data before use. If every host fails, read `docs/incidents/2026-09-10-tdx-hosts-empty-bars.md` before changing anything else; hosts are configurable via `data.tdx_hosts`.
 - Keep Baostock optional and conservative. Do not increase its concurrency or retry loops; upstream blacklisting is a known operational risk.
 - Initialization must remain resumable and validate stock coverage, row count and index count.
 - Daily updates must remain incremental.

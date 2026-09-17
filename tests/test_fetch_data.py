@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from src.fetch_data import (
     normalize_akshare_index_daily,
@@ -104,6 +105,9 @@ def test_tdx_fetcher_switches_host_after_connection_failure() -> None:
         def disconnect(self) -> None:
             pass
 
+        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
+            return self.get_security_bars(category, market, code, start, count)
+
         def get_security_bars(self, category: int, market: int, code: str, start: int, count: int):
             return [
                 {
@@ -145,6 +149,9 @@ def test_tdx_initial_connection_checks_every_configured_host() -> None:
         def disconnect(self) -> None:
             pass
 
+        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
+            return [{"open": 1, "close": 1, "high": 1, "low": 1, "vol": 1, "amount": 1, "datetime": "2026-06-22 15:00"}]
+
     fetcher = TdxDataFetcher(
         "2026-06-01",
         query_retries=1,
@@ -160,6 +167,141 @@ def test_tdx_initial_connection_checks_every_configured_host() -> None:
         pass
 
     assert attempted == ["127.0.0.1", "127.0.0.2", "127.0.0.3"]
+
+
+class _ProbeBar(dict):
+    """One daily bar in the shape pytdx returns."""
+
+    def __init__(self) -> None:
+        super().__init__(open=10, close=10.5, high=10.6, low=9.9, vol=1000, amount=1050000, datetime="2026-06-22 15:00")
+
+
+def test_tdx_fetcher_skips_host_that_connects_but_serves_no_bars() -> None:
+    from src.fetch_data import TdxDataFetcher
+
+    calls: list[str] = []
+
+    class StubHostApi:
+        """Reproduces the 2026-09 failure: connect succeeds, bar requests return an unparseable stub."""
+
+        def connect(self, ip: str, port: int, time_out: float) -> bool:
+            calls.append(f"connect:{ip}")
+            return True
+
+        def disconnect(self) -> None:
+            pass
+
+        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
+            calls.append(f"index:{code}")
+            error = RuntimeError("calling function error")
+            error.original_exception = ValueError("unpack requires a buffer of 4 bytes")
+            raise error
+
+        def get_security_bars(self, *args):
+            raise AssertionError("stub host must not receive stock requests")
+
+    class HealthyHostApi(StubHostApi):
+        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
+            calls.append(f"index:{code}")
+            return [_ProbeBar()]
+
+        def get_security_bars(self, category: int, market: int, code: str, start: int, count: int):
+            calls.append(f"stock:{code}")
+            return [_ProbeBar()]
+
+    apis = iter([StubHostApi(), HealthyHostApi()])
+    fetcher = TdxDataFetcher(
+        "2026-06-01",
+        query_retries=1,
+        hosts=(("stub", "127.0.0.1", 7709), ("healthy", "127.0.0.2", 7709)),
+        api_factory=lambda: next(apis),
+    )
+
+    with fetcher:
+        daily = fetcher.fetch_stock_daily("000001", "2026-06-01", "2026-06-22")
+
+    assert daily["trade_date"].tolist() == ["2026-06-22"]
+    assert calls == ["connect:127.0.0.1", "index:000001", "connect:127.0.0.2", "index:000001", "stock:000001"]
+
+
+def test_tdx_fetcher_error_message_keeps_original_exception() -> None:
+    from src.fetch_data import TdxDataFetcher
+
+    class BrokenApi:
+        def connect(self, ip: str, port: int, time_out: float) -> bool:
+            return True
+
+        def disconnect(self) -> None:
+            pass
+
+        def get_index_bars(self, *args):
+            error = RuntimeError("calling function error")
+            error.original_exception = ValueError("unpack requires a buffer of 4 bytes")
+            raise error
+
+    fetcher = TdxDataFetcher(
+        "2026-06-01",
+        query_retries=1,
+        hosts=(("only", "127.0.0.1", 7709),),
+        api_factory=BrokenApi,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        with fetcher:
+            pass
+
+    message = str(excinfo.value)
+    assert message.startswith("all configured TDX hosts failed")
+    assert "only: calling function error (ValueError: unpack requires a buffer of 4 bytes)" in message
+
+
+def test_parse_tdx_hosts_accepts_ip_port_and_rejects_malformed_entries() -> None:
+    from src.tdx_fetcher import DEFAULT_TDX_HOSTS, parse_tdx_hosts
+
+    assert parse_tdx_hosts([]) == ()
+    assert parse_tdx_hosts([" 117.34.114.17:7709 ", "example.com:80"]) == (
+        ("117.34.114.17:7709", "117.34.114.17", 7709),
+        ("example.com:80", "example.com", 80),
+    )
+    assert all(len(host) == 3 and 0 < host[2] < 65536 for host in DEFAULT_TDX_HOSTS)
+    for bad in ["117.34.114.17", "117.34.114.17:abc", ":7709", "117.34.114.17:0", ""]:
+        with pytest.raises(ValueError, match="tdx host"):
+            parse_tdx_hosts([bad])
+
+
+def test_fetch_tdx_stock_daily_parallel_passes_hosts_to_workers(monkeypatch) -> None:
+    from src import tdx_fetcher as tdx_module
+
+    captured: list[tuple] = []
+
+    class RecordingFetcher:
+        def __init__(self, start_date: str, **kwargs) -> None:
+            captured.append(kwargs["hosts"])
+
+        def __enter__(self) -> "RecordingFetcher":
+            return self
+
+        def __exit__(self, *args) -> None:
+            pass
+
+        def fetch_stock_daily(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
+            return pd.DataFrame([{"code": code, "trade_date": end_date}])
+
+    monkeypatch.setattr(tdx_module, "TdxDataFetcher", RecordingFetcher)
+    hosts = (("custom", "127.0.0.9", 7709),)
+    batches = list(
+        tdx_module.fetch_tdx_stock_daily_parallel(
+            [("000001", "2026-06-01", "2026-06-22"), ("000002", "2026-06-01", "2026-06-22")],
+            workers=1,
+            chunk_size=1,
+            timeout_seconds=3,
+            query_retries=1,
+            hosts=hosts,
+        )
+    )
+
+    assert captured == [hosts, hosts]
+    assert [len(daily) for daily, _failures, _requested in batches] == [1, 1]
 
 
 def test_normalize_akshare_sector_supports_chinese_columns() -> None:

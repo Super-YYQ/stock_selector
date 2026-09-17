@@ -25,6 +25,7 @@ from src.fetch_data import (
     fetch_stock_daily_parallel,
     fetch_tdx_stock_daily_parallel,
 )
+from src.tdx_fetcher import DEFAULT_TDX_HOSTS, parse_tdx_hosts
 from src.factor_diagnostics import build_factor_diagnostics
 from src.market_score import calculate_market_score
 from src.report import write_excel_report
@@ -212,11 +213,16 @@ def _data_provider(config: AppConfig) -> str:
     return (config.data.provider or "tdx").strip().lower()
 
 
+def _tdx_hosts(config: AppConfig) -> tuple[tuple[str, str, int], ...]:
+    return parse_tdx_hosts(config.data.tdx_hosts) or DEFAULT_TDX_HOSTS
+
+
 def _create_tdx_fetcher(config: AppConfig) -> TdxDataFetcher:
     return TdxDataFetcher(
         config.data.start_date,
         timeout_seconds=config.data.tdx_timeout_seconds,
         query_retries=config.data.tdx_query_retries,
+        hosts=_tdx_hosts(config),
     )
 
 
@@ -690,6 +696,7 @@ def update_market_data(
                         chunk_size=chunk_size,
                         timeout_seconds=config.data.tdx_timeout_seconds,
                         query_retries=config.data.tdx_query_retries,
+                        hosts=_tdx_hosts(config),
                     )
                 else:
                     batches = fetch_stock_daily_parallel(

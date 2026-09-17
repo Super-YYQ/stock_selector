@@ -101,16 +101,26 @@ def test_data_config_defaults_use_conservative_parallelism() -> None:
     assert config.data.tdx_parallel_workers == 4
     assert config.data.tdx_parallel_chunk_size == 50
     assert config.data.provider == "tdx"
+    assert config.data.tdx_hosts == []
 
 
-def test_load_config_rejects_unknown_market_board(tmp_path: Path) -> None:
+def test_load_config_reads_tdx_hosts(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "strategy.yml").write_text("", encoding="utf-8")
-    (config_dir / "stock_pool.yml").write_text(
-        "stock_pool:\n  exclude_boards:\n    - 不存在的板块\n",
+    (config_dir / "strategy.yml").write_text(
+        "data:\n  tdx_hosts:\n    - 117.34.114.17:7709\n    - 117.34.114.18:7709\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exclude_boards"):
+    config = load_config(config_dir)
+
+    assert config.data.tdx_hosts == ["117.34.114.17:7709", "117.34.114.18:7709"]
+
+
+def test_load_config_rejects_malformed_tdx_host(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "strategy.yml").write_text("data:\n  tdx_hosts:\n    - 117.34.114.17\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="tdx_hosts"):
         load_config(config_dir)

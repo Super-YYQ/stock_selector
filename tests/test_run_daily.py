@@ -7,6 +7,7 @@ import pytest
 
 from src.config import AppConfig, DataConfig
 from src.fetch_data import TDX_PRICE_BASIS
+from src.tdx_fetcher import DEFAULT_TDX_HOSTS
 from src.database import Database
 from src.run_lock import RunAlreadyLockedError, SingleInstanceRunLock
 from src.run_daily import (
@@ -436,6 +437,16 @@ def test_update_market_data_writes_fetched_tables(tmp_path: Path) -> None:
     assert counts["fresh_stock_symbols"] == 1
     assert counts["fresh_index_symbols"] == 3
 
+
+
+def test_create_tdx_fetcher_uses_configured_hosts_or_defaults() -> None:
+    from src.run_daily import _create_tdx_fetcher
+
+    default_fetcher = _create_tdx_fetcher(AppConfig())
+    assert default_fetcher.hosts == DEFAULT_TDX_HOSTS
+
+    custom = _create_tdx_fetcher(AppConfig(data=DataConfig(tdx_hosts=["10.0.0.1:7709"])))
+    assert custom.hosts == (("10.0.0.1:7709", "10.0.0.1", 7709),)
 
 
 def test_init_falls_back_to_tdx_when_baostock_login_is_blacklisted(tmp_path: Path, monkeypatch) -> None:
@@ -881,10 +892,11 @@ def test_tdx_init_parallel_fetch_marks_full_refresh_for_resume(tmp_path: Path, m
 
     captured: dict[str, object] = {}
 
-    def fake_tdx_parallel(tasks, workers, chunk_size, timeout_seconds, query_retries):
+    def fake_tdx_parallel(tasks, workers, chunk_size, timeout_seconds, query_retries, hosts):
         captured["tasks"] = tasks
         captured["workers"] = workers
         captured["chunk_size"] = chunk_size
+        captured["hosts"] = hosts
         yield (
             pd.DataFrame(
                 [
@@ -913,6 +925,7 @@ def test_tdx_init_parallel_fetch_marks_full_refresh_for_resume(tmp_path: Path, m
 
     counts = run_daily_module.update_market_data(db, config, "2026-06-23", init=True)
 
+    assert captured["hosts"] == DEFAULT_TDX_HOSTS
     assert counts["stock_daily"] == 2
     assert captured["workers"] == 2
     assert captured["chunk_size"] == 10

@@ -14,17 +14,44 @@ logger = logging.getLogger(__name__)
 TDX_PRICE_BASIS = "tdx_unadjusted_v1"
 TDX_BAR_CATEGORY_DAILY = 9
 TDX_BAR_PAGE_SIZE = 800
+# Since 2026-09-10 the TDX-operated public hosts (上证云 / 上海电信 / 北京联通 /
+# 杭州主站 and the "双线" cloud nodes) still accept connections but answer every
+# pytdx 1.72 bar request with a 2-byte stub, so they are unusable here. The
+# 国泰君安 cluster keeps serving the classic protocol; override via data.tdx_hosts.
 DEFAULT_TDX_HOSTS: tuple[tuple[str, str, int], ...] = (
-    ("beijing-unicom-80", "202.108.253.139", 80),
-    ("beijing-unicom", "123.125.108.14", 7709),
-    ("hangzhou-unicom", "60.12.136.250", 7709),
-    ("shanghai-telecom", "180.153.18.170", 7709),
-    ("hangzhou-telecom", "115.238.90.165", 7709),
-    ("shanghai-telecom-80", "180.153.18.172", 80),
+    ("gtja-14", "117.34.114.14", 7709),
+    ("gtja-16", "117.34.114.16", 7709),
+    ("gtja-17", "117.34.114.17", 7709),
+    ("gtja-18", "117.34.114.18", 7709),
+    ("gtja-20", "117.34.114.20", 7709),
+    ("gtja-27", "117.34.114.27", 7709),
 )
+# 上证指数: one daily bar proves a host really serves market data.
+TDX_PROBE_MARKET = 1
+TDX_PROBE_CODE = "000001"
 
 StockDailyTask = tuple[str, str, str]
 StockDailyBatchResult = tuple[pd.DataFrame, list[tuple[str, str]], int]
+
+
+def parse_tdx_hosts(entries: Sequence[str]) -> tuple[tuple[str, str, int], ...]:
+    hosts: list[tuple[str, str, int]] = []
+    for entry in entries:
+        text = str(entry).strip()
+        host, separator, port_text = text.rpartition(":")
+        if not separator or not host or not port_text.isdigit() or not 0 < int(port_text) < 65536:
+            raise ValueError(f"invalid tdx host {entry!r}; expected ip:port")
+        hosts.append((text, host, int(port_text)))
+    return tuple(hosts)
+
+
+def describe_tdx_error(error: BaseException) -> str:
+    # pytdx reports every failed call as "calling function error" and keeps the
+    # real cause (socket error, truncated body, ...) in original_exception.
+    original = getattr(error, "original_exception", None)
+    if original is None or str(original) == str(error):
+        return str(error)
+    return f"{error} ({type(original).__name__}: {original})"
 
 
 def tdx_market(code: str) -> int:
@@ -146,8 +173,9 @@ class TdxDataFetcher:
                 connected = api.connect(host[1], host[2], time_out=float(self.timeout_seconds))
                 if connected is False:
                     raise RuntimeError("connect returned false")
+                self._probe(api)
             except Exception as exc:
-                errors.append(f"{host[0]}: {exc}")
+                errors.append(f"{host[0]}: {describe_tdx_error(exc)}")
                 try:
                     api.disconnect()
                 except Exception:
@@ -158,6 +186,14 @@ class TdxDataFetcher:
             logger.debug("connected to TDX host %s (%s:%s)", host[0], host[1], host[2])
             return
         raise RuntimeError("all configured TDX hosts failed: " + " | ".join(errors))
+
+    @staticmethod
+    def _probe(api: Any) -> None:
+        # A host that connects but cannot return one index bar would fail every
+        # request afterwards; treat it like a failed connection and move on.
+        bars = api.get_index_bars(TDX_BAR_CATEGORY_DAILY, TDX_PROBE_MARKET, TDX_PROBE_CODE, 0, 1)
+        if not bars:
+            raise RuntimeError("probe returned no index bars")
 
     def close(self) -> None:
         if self._api is not None:
@@ -176,7 +212,7 @@ class TdxDataFetcher:
                 return getattr(self._api, method_name)(*args)
             except Exception as exc:
                 host_name = self._connected_host[0] if self._connected_host else "unconnected"
-                errors.append(f"{host_name}: {exc}")
+                errors.append(f"{host_name}: {describe_tdx_error(exc)}")
                 self.close()
                 if attempt < self.query_retries:
                     logger.debug("TDX request failed; switching host (%s/%s): %s", attempt, self.query_retries, exc)
@@ -278,6 +314,7 @@ def _fetch_tdx_batch_worker(
     timeout_seconds: float,
     query_retries: int,
     host_offset: int,
+    hosts: Sequence[tuple[str, str, int]],
 ) -> StockDailyBatchResult:
     rows: list[dict[str, Any]] = []
     failures: list[tuple[str, str]] = []
@@ -285,6 +322,7 @@ def _fetch_tdx_batch_worker(
         tasks[0][1] if tasks else date.today().strftime("%Y-%m-%d"),
         timeout_seconds=timeout_seconds,
         query_retries=query_retries,
+        hosts=hosts,
         host_offset=host_offset,
     )
     try:
@@ -309,6 +347,7 @@ def fetch_tdx_stock_daily_parallel(
     chunk_size: int,
     timeout_seconds: float,
     query_retries: int,
+    hosts: Sequence[tuple[str, str, int]] = DEFAULT_TDX_HOSTS,
 ) -> Iterator[StockDailyBatchResult]:
     chunks = _chunked_tasks([(str(code), str(start), str(end)) for code, start, end in tasks], chunk_size)
     if not chunks:
@@ -317,7 +356,7 @@ def fetch_tdx_stock_daily_parallel(
     max_workers = max(1, min(int(workers), len(chunks)))
     if max_workers == 1:
         for index, chunk in enumerate(chunks):
-            yield _fetch_tdx_batch_worker(chunk, timeout_seconds, query_retries, index)
+            yield _fetch_tdx_batch_worker(chunk, timeout_seconds, query_retries, index, hosts)
         return
 
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="tdx-fetch") as executor:
@@ -336,6 +375,7 @@ def fetch_tdx_stock_daily_parallel(
                 timeout_seconds,
                 query_retries,
                 index,
+                hosts,
             )
             pending[future] = index
 
