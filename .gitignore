@@ -15,3 +15,6 @@ data/*.db-*
 .env
 artifacts/
 .pytest_tmp/
+
+# site/ 由 run_daily 每次从 web/ 模板生成并发布到 gh-pages 分支，不在 main 跟踪
+site/

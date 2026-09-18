@@ -282,6 +282,8 @@ select, input[type="date"], input[type="number"], input[type="time"] {
 }
 select:focus, input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(15, 122, 110, .1); }
 .compact-filters select { min-height: 32px; }
+.history-select { max-width: 160px; min-height: 34px; font-size: 12.5px; }
+.history-select:disabled { opacity: .45; cursor: not-allowed; }
 
 .segmented { display: inline-flex; padding: 3px; background: var(--surface-sunken); border-radius: var(--radius-sm); }
 .segmented button {

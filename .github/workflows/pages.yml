@@ -2,10 +2,7 @@ name: Deploy report to GitHub Pages
 
 on:
   push:
-    branches: [main]
-    paths:
-      - "site/**"
-      - ".github/workflows/pages.yml"
+    branches: [gh-pages]
   workflow_dispatch:
 
 permissions:
@@ -33,7 +30,7 @@ jobs:
       - name: Upload report site
         uses: actions/upload-pages-artifact@v4
         with:
-          path: site
+          path: .
 
       - name: Deploy
         id: deployment

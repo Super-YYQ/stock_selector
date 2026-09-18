@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 
 import pandas as pd
+import pytest
+from fastapi import HTTPException
 
 import src.panel as panel
 
@@ -255,3 +257,39 @@ def test_manual_run_uses_publish_setting(tmp_path: Path, monkeypatch) -> None:
         "daily",
     ]
     assert command[-3:] == ["--date", "2026-07-23", "--publish"]
+
+
+def test_panel_serves_site_data_files(tmp_path: Path, monkeypatch) -> None:
+    """/data 路由为本地面板提供与 Pages 一致的相对路径报告数据。"""
+    _project(tmp_path)
+    monkeypatch.setattr(panel, "ROOT", tmp_path)
+    history_dir = tmp_path / "site" / "data" / "history"
+    history_dir.mkdir(parents=True)
+    (history_dir / "2026-06-22.json").write_text(
+        json.dumps({"report_date": "2026-06-22"}, ensure_ascii=False), encoding="utf-8"
+    )
+    (tmp_path / "site" / "data" / "history.json").write_text("[]", encoding="utf-8")
+
+    latest = panel.site_data_file("latest.json")
+    assert Path(latest.path).name == "latest.json"
+
+    history = panel.site_data_file("history.json")
+    assert Path(history.path).name == "history.json"
+
+    dated = panel.site_data_file("history/2026-06-22.json")
+    assert Path(dated.path).name == "2026-06-22.json"
+
+
+def test_panel_rejects_unexpected_data_paths(tmp_path: Path, monkeypatch) -> None:
+    """/data 路由只接受 latest/history 白名单路径，拒绝穿越与未知文件。"""
+    _project(tmp_path)
+    monkeypatch.setattr(panel, "ROOT", tmp_path)
+
+    for bad in ("../config/strategy.yml", "history/../../strategy.yml", "secret.db", "history/not-a-date.json"):
+        with pytest.raises(HTTPException) as exc_info:
+            panel.site_data_file(bad)
+        assert exc_info.value.status_code == 404
+
+    with pytest.raises(HTTPException) as exc_info:
+        panel.site_data_file("history/2026-06-22.json")
+    assert exc_info.value.status_code == 404

@@ -19,7 +19,7 @@ Main entry points:
 - `run_daily.py` delegates to `src.run_daily.run`
 - `python -m src.panel` starts the FastAPI panel
 - `scripts/bootstrap.py` owns one-click environment setup
-- `scripts/publish_pages.py` publishes only `site/`
+- GitHub Pages deploys only from the generated `gh-pages` branch; `site/` is untracked on `main` and produced by every run from `web/`.
 
 ## Architecture
 
@@ -48,7 +48,7 @@ Main entry points:
 - Daily updates must remain incremental.
 - A single symbol failure must not abort the whole universe unless a circuit breaker identifies systemic provider failure.
 - Do not commit `data/*.db`, logs, Excel reports or virtual environments.
-- GitHub Pages may receive only generated static files under `site/`.
+- GitHub Pages may receive only generated static files (site content) plus the Pages deploy workflow.
 - The panel binds to `127.0.0.1` by default. Public server deployment requires reverse-proxy authentication and HTTPS.
 - Scheduled-task management must keep the task name and script paths fixed. Never accept arbitrary shell commands from the panel.
 - Strategy scores are aggregated by family maximum, then summed across families. Do not restore naive summation of related strategies.
@@ -119,6 +119,6 @@ For deployment changes, validate `docker compose config` and inspect the Pages w
 
 The user may have unrelated work in the tree. Never revert it.
 
-Generated static reports under `site/` are intentionally trackable for Pages. Historical JSON retention is controlled by `report.history_days`. The publish script stages only `site/`.
+`site/` is untracked on `main` and ignored; the publish script syncs it to the `gh-pages` orphan branch, which is the durable store for report history. Historical JSON retention is controlled by `report.history_days`.
 
 Before committing, scan Chinese text files for replacement characters or accidental question-mark corruption.

@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -17,25 +19,51 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.run_lock import coordinated_run_lock
+from src.atomic_io import atomic_write_text
 
 
 RUN_LOCK_PATH = ROOT / "data" / "run_daily.lock"
 PUBLISH_TRAILER = "Stock-Selector-Publish: v1"
-REPORT_PATHS = ("site/data/latest.json", "site/data/history.json")
+SITE_DIR = "site"
+LATEST_PATH = "site/data/latest.json"
+HISTORY_INDEX_PATH = "site/data/history.json"
 HISTORY_PATH_RE = re.compile(r"^site/data/history/(\d{4}-\d{2}-\d{2})\.json$")
+ASSET_PATH_RE = re.compile(r"^site/assets/[^/]+$")
+SITE_TEMPLATE_PATHS = frozenset({"site/index.html", "site/404.html", "site/.nojekyll"})
+ALLOWED_SITE_DIRS = frozenset({"site/assets", "site/data", "site/data/history"})
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 
 
 @dataclass(frozen=True)
 class ReportSnapshot:
     report_date: str
-    managed_paths: tuple[str, ...]
+    history_dates: tuple[str, ...]
 
 
-def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+_sleep = time.sleep
+
+# 访问 GitHub 的 ls-remote/clone/push 常被瞬时网络故障打断（2026-09-02/03/18
+# 各丢过一次发布），因此对可识别的瞬时错误做有限重试；认证失败等确定性错误不重试。
+_TRANSIENT_NET_ERROR_RE = re.compile(
+    r"SSL_ERROR_SYSCALL|SSL_connect|GnuTLS|Failed to connect|"
+    r"Connection (?:reset|refused|aborted|closed)|Could not resolve host|"
+    r"Recv failure|Empty reply from server|timed? ?out|"
+    r"RPC failed|remote end hung up|early EOF|invalid index-pack output",
+    re.IGNORECASE,
+)
+_NET_RETRY_DELAYS = (5, 10)
+
+
+def git(
+    *args: str,
+    check: bool = True,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
-        cwd=ROOT,
+        cwd=cwd or ROOT,
         check=check,
         text=True,
         encoding="utf-8",
@@ -44,22 +72,13 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     )
 
 
-_sleep = time.sleep
-
-# 访问 GitHub 的 fetch/push 常被瞬时网络故障打断（2026-09-02/03/18 各丢过一次发布），
-# 因此对可识别的瞬时错误做有限重试；认证失败、非快进等确定性错误不重试。
-_TRANSIENT_NET_ERROR_RE = re.compile(
-    r"SSL_ERROR_SYSCALL|SSL_connect|GnuTLS|Failed to connect|"
-    r"Connection (?:reset|refused|aborted|closed)|Could not resolve host|"
-    r"Recv failure|Empty reply from server|timed? ?out",
-    re.IGNORECASE,
-)
-_NET_RETRY_DELAYS = (5, 10)
-
-
-def _git_network(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """执行会访问网络的 git 命令（fetch/push），对瞬时网络故障有限重试。"""
-    result = git(*args, check=check)
+def _git_network(
+    *args: str,
+    check: bool = True,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """执行会访问网络的 git 命令，对瞬时网络故障有限重试。"""
+    result = git(*args, check=check, cwd=cwd)
     for attempt, delay in enumerate(_NET_RETRY_DELAYS, start=2):
         if result.returncode == 0:
             return result
@@ -70,14 +89,14 @@ def _git_network(*args: str, check: bool = True) -> subprocess.CompletedProcess[
         detail = stderr.strip().splitlines()[-1] if stderr.strip() else "未知网络错误"
         print(f"git {verb} 疑似瞬时网络故障，{delay} 秒后第 {attempt} 次尝试：{detail}")
         _sleep(delay)
-        result = git(*args, check=check)
+        result = git(*args, check=check, cwd=cwd)
     return result
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="安全发布最新静态盘后报告到 GitHub Pages")
     parser.add_argument("--remote", default="origin")
-    parser.add_argument("--branch", default="main")
+    parser.add_argument("--branch", default="gh-pages")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
@@ -87,389 +106,268 @@ def _git_error(prefix: str, result: subprocess.CompletedProcess[str]) -> Runtime
     return RuntimeError(f"{prefix}: {detail}" if detail else prefix)
 
 
-def _validate_ref_arguments(remote: str, branch: str) -> None:
-    if not REMOTE_NAME_RE.fullmatch(remote):
-        raise RuntimeError(f"远端名称不合法: {remote}")
-    checked = git("check-ref-format", "--branch", branch, check=False)
-    if checked.returncode != 0:
-        raise RuntimeError(f"目标分支名称不合法: {branch}")
+def _history_days() -> int:
+    from src.config import load_config
+
+    return load_config(ROOT / "config").report.history_days
 
 
-def _is_ancestor(older: str, newer: str) -> bool:
-    result = git("merge-base", "--is-ancestor", older, newer, check=False)
-    if result.returncode not in {0, 1}:
-        raise _git_error("无法校验 Git 提交关系", result)
-    return result.returncode == 0
+def _read_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _is_managed_report_path(path: str) -> bool:
-    return path in REPORT_PATHS or HISTORY_PATH_RE.fullmatch(path) is not None
+def _is_allowed_site_path(relative: str) -> bool:
+    if relative in SITE_TEMPLATE_PATHS:
+        return True
+    if relative == LATEST_PATH or relative == HISTORY_INDEX_PATH:
+        return True
+    if HISTORY_PATH_RE.fullmatch(relative) is not None:
+        return True
+    return ASSET_PATH_RE.fullmatch(relative) is not None
 
 
-def _validate_publish_commit(commit_sha: str) -> None:
-    parents = git("rev-list", "--parents", "-n", "1", commit_sha).stdout.split()
-    if len(parents) != 2:
-        raise RuntimeError(f"待推送提交 {commit_sha[:10]} 不是单父提交，已停止自动发布")
+def _validate_report_inputs() -> ReportSnapshot:
+    """发布前对 site/ 做纯磁盘校验：正式报告、索引一致、文件白名单。
 
-    message = git("show", "-s", "--format=%B", commit_sha).stdout.splitlines()
-    if PUBLISH_TRAILER not in {line.strip() for line in message}:
-        raise RuntimeError(
-            f"本地分支包含非发布提交 {commit_sha[:10]}，请通过正常 PR 流程推送"
-        )
+    历史不可变（与 gh-pages 的对比）在克隆远端后另行校验。
+    """
+    site = ROOT / SITE_DIR
+    if not site.is_dir():
+        raise RuntimeError("site/ 目录不存在，无法发布")
 
-    paths = [
-        line.strip()
-        for line in git(
-            "diff-tree",
-            "--no-commit-id",
-            "--name-only",
-            "-r",
-            commit_sha,
-        ).stdout.splitlines()
-        if line.strip()
-    ]
-    if not paths or any(not _is_managed_report_path(path) for path in paths):
-        raise RuntimeError(
-            f"待推送提交 {commit_sha[:10]} 含有非报告文件，已停止自动发布"
-        )
+    latest_path = ROOT / LATEST_PATH
+    if not latest_path.exists():
+        raise RuntimeError("缺少 site/data/latest.json，无法发布")
+    latest = _read_json(latest_path)
+    if not isinstance(latest, dict):
+        raise RuntimeError("latest.json 不是 JSON 对象，无法发布")
+    if latest.get("is_provisional") is True or latest.get("snapshot_type") == "intraday":
+        raise RuntimeError("latest.json 为盘中临时快照，不作为正式报告发布")
+    report_date = str(latest.get("report_date") or "")
+    if DATE_RE.fullmatch(report_date) is None:
+        raise RuntimeError(f"latest.json 的 report_date 非法: {report_date!r}")
+
+    same_day_history = ROOT / f"site/data/history/{report_date}.json"
+    if not same_day_history.exists():
+        raise RuntimeError(f"缺少当日历史报告 {same_day_history}，无法发布")
+    if latest_path.read_bytes() != same_day_history.read_bytes():
+        raise RuntimeError("latest.json 与同日期历史报告内容不一致，已停止发布")
+
+    index_path = ROOT / HISTORY_INDEX_PATH
+    index = _read_json(index_path)
+    if not isinstance(index, list):
+        raise RuntimeError("site/data/history.json 不是列表，无法发布")
+    for item in index:
+        if not isinstance(item, dict):
+            raise RuntimeError("history.json 条目不是对象，无法发布")
+        item_date = str(item.get("report_date") or "")
+        item_path = str(item.get("path") or "")
+        if DATE_RE.fullmatch(item_date) is None or item_path != f"data/history/{item_date}.json":
+            raise RuntimeError(f"history.json 条目非法: {item}")
+        if not (ROOT / "site" / item_path).exists():
+            raise RuntimeError("历史索引与磁盘文件不一致，未找到 " + item_path)
+
+    history_dir = ROOT / "site/data/history"
+    disk_dates: list[str] = []
+    for item in sorted(history_dir.glob("*.json")):
+        payload = _read_json(item)
+        if not isinstance(payload, dict) or str(payload.get("report_date")) != item.stem:
+            raise RuntimeError(f"历史报告 {item.name} 的 report_date 与文件名日期不一致")
+        disk_dates.append(item.stem)
+
+    for dirpath, _dirnames, filenames in site.walk():
+        for name in filenames:
+            relative = (dirpath / name).relative_to(ROOT).as_posix()
+            if not _is_allowed_site_path(relative):
+                raise RuntimeError(f"{relative} 不属于可发布文件，已停止发布")
+
+    return ReportSnapshot(
+        report_date=report_date,
+        history_dates=tuple(sorted(disk_dates, reverse=True)),
+    )
 
 
-def _validate_pending_commits(remote_sha: str, local_sha: str) -> list[str]:
-    commits = [
-        line.strip()
-        for line in git("rev-list", "--reverse", f"{remote_sha}..{local_sha}").stdout.splitlines()
-        if line.strip()
-    ]
-    if not commits:
-        raise RuntimeError("无法识别本地领先提交，已停止自动发布")
-    for commit_sha in commits:
-        _validate_publish_commit(commit_sha)
-    return commits
-
-
-def _fetch_target(remote: str, branch: str) -> str:
+def _remote_url(remote: str) -> str:
     remotes = {line.strip() for line in git("remote").stdout.splitlines() if line.strip()}
     if remote not in remotes:
         raise RuntimeError(f"Git 远端 {remote!r} 不存在，已停止发布")
-    remote_url = git("remote", "get-url", remote, check=False)
-    if remote_url.returncode != 0 or not remote_url.stdout.strip():
-        raise _git_error(f"无法读取 Git 远端 {remote!r}", remote_url)
-
-    remote_ref = f"refs/remotes/{remote}/{branch}"
-    refspec = f"+refs/heads/{branch}:{remote_ref}"
-    fetched = _git_network("fetch", "--no-tags", remote, refspec, check=False)
-    if fetched.returncode != 0:
-        raise _git_error(f"无法更新 {remote}/{branch}，未创建发布提交", fetched)
-    resolved = git("rev-parse", "--verify", remote_ref, check=False)
-    if resolved.returncode != 0:
-        raise RuntimeError(f"远端分支 {remote}/{branch} 不存在，已停止发布")
+    resolved = git("remote", "get-url", remote, check=False)
+    if resolved.returncode != 0 or not resolved.stdout.strip():
+        raise _git_error(f"无法读取 Git 远端 {remote!r}", resolved)
     return resolved.stdout.strip()
 
 
-def _push_branch(remote: str, branch: str, commit_sha: str) -> None:
-    if not _is_ancestor(
-        git("rev-parse", "--verify", f"refs/remotes/{remote}/{branch}").stdout.strip(),
-        commit_sha,
-    ):
-        raise RuntimeError("发布提交无法快进目标远端分支，已停止推送")
-    pushed = _git_network(
-        "push",
-        remote,
-        f"{commit_sha}:refs/heads/{branch}",
-        check=False,
+def _pages_branch_exists(remote_url: str, branch: str) -> bool:
+    listing = _git_network(
+        "ls-remote", "--heads", remote_url, f"refs/heads/{branch}", check=False
     )
-    if pushed.returncode != 0:
-        raise _git_error(
-            f"GitHub 推送失败；发布提交 {commit_sha[:10]} 已保留，下次会先重试",
-            pushed,
+    if listing.returncode != 0:
+        raise _git_error(f"无法查询远端分支 {branch}", listing)
+    return listing.stdout.strip() != ""
+
+
+def _prepare_pages_worktree(remote_url: str, branch: str, workdir: Path) -> None:
+    """把远端 gh-pages 分支检出到临时目录；分支不存在时初始化为孤儿分支。"""
+    if _pages_branch_exists(remote_url, branch):
+        cloned = _git_network(
+            "-c", "core.autocrlf=false",
+            "clone", "--single-branch", "--branch", branch, remote_url, str(workdir),
+            check=False,
         )
-
-
-def _ensure_report_inputs_clean() -> None:
-    """保留为 no-op，向后兼容外部/测试引用。
-
-    发布提交由 ``_commit_report`` 以 ``--only -- <site/data/*>`` 方式创建，
-    仅含生成报告数据；本地未提交的代码、配置、模板不会进入该提交，因此不再
-    校验输入源码是否干净，避免开发态实验（如勾选科创板过滤）阻断定时发布。
-    """
-    return None
-
-
-def _prepare_branch(remote: str, branch: str, *, dry_run: bool) -> bool:
-    if not (ROOT / ".git").exists():
-        raise RuntimeError("当前目录不是 Git 仓库，无法自动发布")
-    inside = git("rev-parse", "--is-inside-work-tree", check=False)
-    if inside.returncode != 0 or inside.stdout.strip() != "true":
-        raise RuntimeError("当前目录不是 Git 工作区，无法自动发布")
-
-    _validate_ref_arguments(remote, branch)
-    current = git("symbolic-ref", "--quiet", "--short", "HEAD", check=False)
-    if current.returncode != 0:
-        raise RuntimeError("当前处于 detached HEAD，已停止自动发布")
-    current_branch = current.stdout.strip()
-    if current_branch != branch:
-        raise RuntimeError(
-            f"当前分支是 {current_branch!r}，自动发布只允许从 {branch!r} 分支执行"
-        )
-
-    _ensure_report_inputs_clean()
-    remote_sha = _fetch_target(remote, branch)
-    local_sha = git("rev-parse", "--verify", "HEAD").stdout.strip()
-    if local_sha == remote_sha:
-        return False
-
-    if _is_ancestor(remote_sha, local_sha):
-        commits = _validate_pending_commits(remote_sha, local_sha)
-        if dry_run:
-            print(
-                f"检测到 {len(commits)} 个待推送发布提交；dry-run 不会执行推送："
-                f" {local_sha[:10]}"
-            )
-            return True
-        _push_branch(remote, branch, local_sha)
-        print(f"已重试并推送待发布提交 {local_sha[:10]}")
-        return False
-
-    if _is_ancestor(local_sha, remote_sha):
-        raise RuntimeError(
-            f"本地 {branch} 落后于 {remote}/{branch}，请先执行 git pull --ff-only "
-            "并重新生成报告"
-        )
-    raise RuntimeError(
-        f"本地 {branch} 与 {remote}/{branch} 已分叉，不能安全快进；"
-        "请先人工处理分支差异"
+        if cloned.returncode != 0:
+            raise _git_error(f"无法克隆远端分支 {branch}", cloned)
+        return
+    initialized = git("init", "--quiet", str(workdir), check=False)
+    if initialized.returncode != 0:
+        raise _git_error("无法初始化发布临时目录", initialized)
+    git_dir = workdir / ".git"
+    git("--git-dir", str(git_dir), "symbolic-ref", "HEAD", f"refs/heads/{branch}")
+    added = git(
+        "--git-dir", str(git_dir), "remote", "add", "origin", remote_url, check=False
     )
-
-
-def _read_json(path: Path, description: str) -> object:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"{description}不存在: {path.relative_to(ROOT).as_posix()}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"{description}不是有效 JSON: {exc}") from exc
-
-
-def _validate_report_date(value: object, description: str) -> str:
-    if not isinstance(value, str):
-        raise RuntimeError(f"{description}缺少合法的 report_date")
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError as exc:
-        raise RuntimeError(f"{description}的 report_date 格式错误: {value!r}") from exc
-    if parsed.isoformat() != value:
-        raise RuntimeError(f"{description}的 report_date 格式错误: {value!r}")
-    return value
-
-
-def _is_tracked(path: str) -> bool:
-    return git("ls-files", "--error-unmatch", "--", path, check=False).returncode == 0
-
-
-def _is_dirty_against_head(path: str) -> bool:
-    return git("diff", "--quiet", "HEAD", "--", path, check=False).returncode != 0
-
-
-def _read_head_blob_json(path: str) -> object | None:
-    blob = git("show", f"HEAD:{path}", check=False)
-    if blob.returncode != 0:
-        return None
-    try:
-        return json.loads(blob.stdout)
-    except (OSError, ValueError):
-        return None
-
-
-def _is_intraday_to_close_upgrade(path: str) -> bool:
-    """只对唯一合法的既有报告分歧返回 True：HEAD 是盘中临时快照
-    (is_provisional=true) 且工作区为同 report_date 的正式盘后报告
-    (is_provisional=false、snapshot_type=="close")，且该 report_date 与
-    文件名日期一致。任何其它分歧（手改、schema 不符、日期错位、文件名
-    与 report_date 不一致等）都返回 False，由调用方照旧硬失败。"""
-    match = HISTORY_PATH_RE.match(path)
-    if match is None:
-        return False
-    filename_date = match.group(1)
-
-    head = _read_head_blob_json(path)
-    if not isinstance(head, dict):
-        return False
-    if not bool(head.get("is_provisional")):
-        return False
-    head_date = head.get("report_date")
-    if not isinstance(head_date, str) or head_date != filename_date:
-        return False
-
-    try:
-        working = json.loads((ROOT / path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if not isinstance(working, dict):
-        return False
-    if bool(working.get("is_provisional")):
-        return False
-    working_type = working.get("snapshot_type")
-    if not (isinstance(working_type, str) and working_type == "close"):
-        return False
-    working_date = working.get("report_date")
-    if not isinstance(working_date, str) or working_date != filename_date:
-        return False
-    return working_date == head_date
-
-
-def _load_report_snapshot() -> ReportSnapshot:
-    latest_path = ROOT / REPORT_PATHS[0]
-    latest = _read_json(latest_path, "site/data/latest.json ")
-    if not isinstance(latest, dict):
-        raise RuntimeError("site/data/latest.json 顶层必须是 JSON 对象")
-    report_date = _validate_report_date(latest.get("report_date"), "静态报告")
-
-    history_index_path = ROOT / REPORT_PATHS[1]
-    history_index = _read_json(history_index_path, "site/data/history.json ")
-    if not isinstance(history_index, list):
-        raise RuntimeError("site/data/history.json 顶层必须是 JSON 数组")
-
-    listed_paths: list[str] = []
-    listed_dates: list[str] = []
-    for item in history_index:
-        if not isinstance(item, dict):
-            raise RuntimeError("历史报告索引包含非对象条目，已停止发布")
-        item_date = _validate_report_date(item.get("report_date"), "历史报告索引")
-        expected_relative = f"data/history/{item_date}.json"
-        if item.get("path") != expected_relative:
-            raise RuntimeError(f"历史报告路径不合法: {item.get('path')!r}")
-        repository_path = f"site/{expected_relative}"
-        if repository_path in listed_paths:
-            raise RuntimeError(f"历史报告索引包含重复日期: {item_date}")
-
-        payload_path = ROOT / repository_path
-        payload = _read_json(payload_path, f"历史报告 {item_date} ")
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"历史报告 {item_date} 顶层必须是 JSON 对象")
-        if _validate_report_date(payload.get("report_date"), f"历史报告 {item_date}") != item_date:
-            raise RuntimeError(f"历史报告文件名与 report_date 不一致: {repository_path}")
-
-        listed_paths.append(repository_path)
-        listed_dates.append(item_date)
-
-    if listed_dates != sorted(listed_dates, reverse=True):
-        raise RuntimeError("历史报告索引未按日期倒序排列，已停止发布")
-
-    current_history = f"site/data/history/{report_date}.json"
-    if current_history not in listed_paths:
-        raise RuntimeError("历史报告索引未包含最新报告日期，已停止发布")
-    if latest_path.read_bytes() != (ROOT / current_history).read_bytes():
-        raise RuntimeError("latest.json 与同日期历史报告内容不一致，已停止发布")
-
-    upgraded_paths: list[str] = []
-    inherited_paths: list[str] = []
-    for path in listed_paths:
-        if path == current_history:
-            continue
-        if not _is_tracked(path):
-            # 上次发布若因瞬态故障（如网络中断）在提交前中途失败，本轮新生成的
-            # 历史报告会停留在未跟踪状态。它已在上面通过 JSON 与 report_date==
-            # 文件名校验，是合法的正式报告，直接纳入本次发布；否则一次失败的
-            # 发布会让后续所有自动发布永久卡死（见 site/data/history/*.json）。
-            if (ROOT / path).exists():
-                inherited_paths.append(path)
-            continue
-        if _is_dirty_against_head(path):
-            if _is_intraday_to_close_upgrade(path):
-                upgraded_paths.append(path)
-                continue
-            raise RuntimeError(f"既有历史报告存在额外修改，未纳入自动发布: {path}")
-
-    tracked_history = {
-        line.strip()
-        for line in git("ls-files", "--", "site/data/history").stdout.splitlines()
-        if HISTORY_PATH_RE.fullmatch(line.strip())
-    }
-    intended_history = set(listed_paths)
-    stale_history = sorted(tracked_history - intended_history)
-    for path in stale_history:
-        if (ROOT / path).exists():
-            raise RuntimeError(f"历史索引与磁盘文件不一致，未自动删除: {path}")
-
-    managed = (*REPORT_PATHS, current_history, *upgraded_paths, *inherited_paths, *stale_history)
-    return ReportSnapshot(report_date=report_date, managed_paths=tuple(dict.fromkeys(managed)))
-
-
-def _has_worktree_changes(paths: Sequence[str]) -> bool:
-    for path in paths:
-        target = ROOT / path
-        if not _is_tracked(path):
-            if target.exists():
-                return True
-            continue
-        if _is_dirty_against_head(path):
-            return True
-    return False
-
-
-def _ensure_managed_index_clean(paths: Sequence[str]) -> None:
-    staged = git("diff", "--cached", "--name-only", "--", *paths).stdout.splitlines()
-    if any(line.strip() for line in staged):
-        raise RuntimeError("待发布报告文件已有暂存修改，请先处理暂存区后再发布")
-
-
-def _commit_report(snapshot: ReportSnapshot, branch: str) -> str:
-    _ensure_managed_index_clean(snapshot.managed_paths)
-    added = git("add", "-A", "--", *snapshot.managed_paths, check=False)
     if added.returncode != 0:
-        raise _git_error("无法暂存生成的报告文件", added)
+        raise _git_error("无法为发布临时目录配置远端", added)
 
-    message = f"chore(report): publish {snapshot.report_date}"
+
+def _sync_site_to_pages(workdir: Path) -> None:
+    """用本地 site/ 完整替换发布工作区的已检出内容（保留 .git）。
+
+    同时带入 Pages 部署工作流：Actions 的 push 触发要求工作流文件存在于
+    被推送的分支上，孤儿分支不会继承 main 的 .github。
+    """
+    for item in workdir.iterdir():
+        if item.name == ".git":
+            continue
+        shutil.rmtree(item) if item.is_dir() else item.unlink()
+    shutil.copytree(ROOT / SITE_DIR, workdir, dirs_exist_ok=True)
+    workflow = ROOT / ".github" / "workflows" / "pages.yml"
+    if workflow.is_file():
+        target = workdir / ".github" / "workflows" / "pages.yml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(workflow, target)
+
+
+def _backfill_and_prune_history(workdir: Path, history_days: int) -> None:
+    """以 gh-pages 为历史持久层：回填本地缺失的保留期文件，删除超期文件。
+
+    保留集合 = gh-pages 日期 ∪ 本地日期 中最新的 history_days 个。换机重装后
+    本地只剩当天文件时，历史从 gh-pages 回填，而不是把线上历史清空。
+    """
+    local_dir = ROOT / "site/data/history"
+    pages_dir = workdir / "data/history"
+    local_dates = {item.stem for item in local_dir.glob("*.json")}
+    pages_dates = {item.stem for item in pages_dir.glob("*.json")} if pages_dir.is_dir() else set()
+    retained = set(sorted(local_dates | pages_dates, reverse=True)[: max(1, history_days)])
+
+    for item_date in sorted(retained - local_dates):
+        source = pages_dir / f"{item_date}.json"
+        if source.exists():
+            shutil.copyfile(source, local_dir / source.name)
+
+    for item in local_dir.glob("*.json"):
+        if item.stem not in retained:
+            item.unlink()
+
+    history = [
+        {"report_date": item.stem, "path": f"data/history/{item.name}"}
+        for item in sorted(local_dir.glob("*.json"), reverse=True)
+    ]
+    atomic_write_text(
+        ROOT / HISTORY_INDEX_PATH, json.dumps(history, ensure_ascii=False, indent=2)
+    )
+
+
+def _same_report_content(left: bytes, right: bytes) -> bool:
+    """比较报告内容，行尾差异（CRLF/LF 混杂）不算改写。
+
+    历史文件由不同时期的写入机制生成，行尾并不统一；git 的 autocrlf 也会在
+    检出时转换行尾。字节级比较会把未改动的文件误判为已修改。
+    """
+    return left == right or left.replace(b"\r\n", b"\n") == right.replace(b"\r\n", b"\n")
+
+
+def _validate_history_immutability(workdir: Path, latest_date: str) -> None:
+    """已发布历史不得被静默改写；当日盘中快照升级为收盘正式报告除外。"""
+    local_dir = ROOT / "site/data/history"
+    pages_dir = workdir / "data/history"
+    if not pages_dir.is_dir():
+        return
+    for item in sorted(pages_dir.glob("*.json")):
+        local_file = local_dir / item.name
+        if not local_file.exists():
+            continue  # 超过保留期已被清剪，或本地从未有过
+        if _same_report_content(local_file.read_bytes(), item.read_bytes()):
+            continue
+        if item.stem == latest_date:
+            pages_payload = _read_json(item)
+            local_payload = _read_json(local_file)
+            pages_is_intraday = (
+                isinstance(pages_payload, dict)
+                and pages_payload.get("snapshot_type") == "intraday"
+            )
+            local_is_close = (
+                isinstance(local_payload, dict)
+                and local_payload.get("snapshot_type") == "close"
+                and local_payload.get("is_provisional") is not True
+            )
+            if pages_is_intraday and local_is_close:
+                continue  # 当日盘中快照 → 收盘正式报告的升级
+        raise RuntimeError(
+            f"已发布历史报告内容不一致: data/history/{item.name}，"
+            "如确需修正请手动处理 gh-pages 分支"
+        )
+
+
+def _commit_and_push(workdir: Path, branch: str, report_date: str) -> None:
+    git("add", "-A", cwd=workdir)
+    # 变化检测必须基于暂存区内容：本机系统级 autocrlf=true 会让 CRLF/LF 行尾
+    # 差异在 `git status` 里表现为幽灵修改（diff 为空、add 后无可提交内容），
+    # 直接信任 porcelain 会误入提交流程并报 "nothing to commit"。
+    has_head = (
+        git("rev-parse", "--verify", "--quiet", "HEAD", cwd=workdir, check=False).returncode == 0
+    )
+    if has_head:
+        staged = git("diff", "--cached", "--name-only", "HEAD", cwd=workdir)
+        if not staged.stdout.strip():
+            print("网页报告没有变化，无需发布")
+            return
+    message = f"chore(report): publish {report_date}"
     committed = git(
-        "commit",
-        "--only",
-        "-m",
-        message,
-        "-m",
-        PUBLISH_TRAILER,
-        "--",
-        *snapshot.managed_paths,
-        check=False,
+        "commit", "-m", message, "-m", PUBLISH_TRAILER, cwd=workdir, check=False
     )
     if committed.returncode != 0:
-        git("reset", "--quiet", "HEAD", "--", *snapshot.managed_paths, check=False)
         raise _git_error("Git 提交失败", committed)
-
-    commit_sha = git("rev-parse", "--verify", f"refs/heads/{branch}").stdout.strip()
-    _validate_publish_commit(commit_sha)
-    return commit_sha
+    pushed = _git_network(
+        "push", "origin", f"HEAD:refs/heads/{branch}", cwd=workdir, check=False
+    )
+    if pushed.returncode != 0:
+        raise _git_error("GitHub 推送失败；发布内容未丢失，下次运行会重试", pushed)
+    print(f"已发布 {report_date} 网页报告到 gh-pages 分支")
 
 
 def _main_unlocked(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    pending_only = _prepare_branch(args.remote, args.branch, dry_run=args.dry_run)
-    if pending_only:
-        return 0
+    if not REMOTE_NAME_RE.fullmatch(args.remote):
+        raise RuntimeError(f"远端名称不合法: {args.remote}")
+    if not BRANCH_NAME_RE.fullmatch(args.branch):
+        raise RuntimeError(f"目标分支名称不合法: {args.branch}")
 
-    snapshot = _load_report_snapshot()
-    if not _has_worktree_changes(snapshot.managed_paths):
-        print("网页报告没有变化，无需发布")
-        return 0
-
+    snapshot = _validate_report_inputs()
     if args.dry_run:
         print(
-            f"dry-run：将发布 {snapshot.report_date}，仅包含以下生成文件：\n"
-            + "\n".join(f"- {path}" for path in snapshot.managed_paths)
+            f"dry-run：将发布 {snapshot.report_date}，仅包含 site/ 下的生成文件；"
+            "不会克隆或推送远端"
         )
         return 0
 
-    commit_sha = _commit_report(snapshot, args.branch)
-    remote_sha = _fetch_target(args.remote, args.branch)
-    if not _is_ancestor(remote_sha, commit_sha):
-        raise RuntimeError(
-            f"{args.remote}/{args.branch} 在发布期间发生变化；"
-            f"发布提交 {commit_sha[:10]} 已保留，未执行非快进推送"
-        )
-    _push_branch(args.remote, args.branch, commit_sha)
-    print(
-        f"已发布 {snapshot.report_date} 网页报告到 {args.remote}/{args.branch} "
-        f"({commit_sha[:10]})"
-    )
+    remote_url = _remote_url(args.remote)
+    with tempfile.TemporaryDirectory(prefix="publish-pages-") as tmp:
+        workdir = Path(tmp) / "pages"
+        _prepare_pages_worktree(remote_url, args.branch, workdir)
+        _backfill_and_prune_history(workdir, _history_days())
+        _validate_history_immutability(workdir, snapshot.report_date)
+        _sync_site_to_pages(workdir)
+        _commit_and_push(workdir, args.branch, snapshot.report_date)
     return 0
 
 

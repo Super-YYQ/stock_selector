@@ -5,6 +5,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -39,6 +40,10 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "web"
 PANEL_PID_FILE = ROOT / "data" / "panel.pid"
 LOGGER = logging.getLogger(__name__)
+
+# /data 路由为本地面板提供与 Pages 相同相对路径的报告数据（历史浏览用）。
+_SITE_DATA_ALLOWED = {"latest.json", "history.json"}
+_SITE_DATA_HISTORY_RE = re.compile(r"^history/\d{4}-\d{2}-\d{2}\.json$")
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -195,6 +200,18 @@ def latest_report() -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"报告数据读取失败: {exc}") from exc
+
+
+@app.get("/data/{relative:path}")
+def site_data_file(relative: str) -> FileResponse:
+    """以与 Pages 相同的相对路径提供 site/data 报告数据（含历史报告）。"""
+    if relative not in _SITE_DATA_ALLOWED and _SITE_DATA_HISTORY_RE.fullmatch(relative) is None:
+        raise HTTPException(status_code=404, detail="未知报告数据文件")
+    data_root = (ROOT / "site" / "data").resolve()
+    path = (data_root / relative).resolve()
+    if data_root not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="报告数据文件不存在")
+    return FileResponse(path, media_type="application/json")
 
 
 @app.get("/api/health")

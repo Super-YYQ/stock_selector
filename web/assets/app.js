@@ -19,7 +19,9 @@
     focusBoard: "",
     focusStockCode: "",
     activeCustomKey: "",
-    customSearch: ""
+    customSearch: "",
+    historyDates: [],
+    viewDate: ""
   };
 
   var viewMeta = {
@@ -73,7 +75,8 @@
   }
   async function request(path, options) {
     var controller = new AbortController();
-    var timer = window.setTimeout(function () { controller.abort(); }, 15000);
+    var timeoutMs = options && options.timeoutMs ? options.timeoutMs : 15000;
+    var timer = window.setTimeout(function () { controller.abort(); }, timeoutMs);
     try {
       var response = await fetch(path, Object.assign({ cache: "no-store", signal: controller.signal }, options || {}));
       if (!response.ok) {
@@ -104,7 +107,7 @@
       state.ready = true;
     } catch (apiError) {
       try {
-        state.payload = await request("data/latest.json");
+        state.payload = await request("data/latest.json", { timeoutMs: 60000 });
         state.mode = "static";
         state.ready = false;
         state.status = null;
@@ -119,8 +122,56 @@
         return;
       }
     }
+    state.viewDate = "";
+    state.historyDates = await loadHistoryDates();
+    renderHistorySelect();
     renderAll();
     setConnection("ok", state.mode === "local" ? "本地服务已连接" : "云端报告");
+  }
+
+  function historyDataPath(relative) {
+    return (state.mode === "local" ? "/data/" : "data/") + relative;
+  }
+
+  async function loadHistoryDates() {
+    try {
+      var list = await request(historyDataPath("history.json"), { timeoutMs: 60000 });
+      return Array.isArray(list)
+        ? list.map(function (item) { return item && item.report_date; }).filter(Boolean)
+        : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function renderHistorySelect() {
+    var select = byId("history-select");
+    if (!select) return;
+    var latest = state.payload && state.payload.report_date;
+    var options = ['<option value="">最新报告</option>'];
+    (state.historyDates || []).forEach(function (date) {
+      var label = date === latest ? date + "（最新）" : date;
+      options.push('<option value="' + escapeHtml(date) + '">' + escapeHtml(label) + "</option>");
+    });
+    select.innerHTML = options.join("");
+    select.value = state.viewDate || "";
+    select.disabled = !(state.historyDates || []).length;
+  }
+
+  async function selectDate(date) {
+    if (!date) { await load(); return; }
+    if (date === state.viewDate) return;
+    setConnection("loading", "正在读取历史报告");
+    try {
+      state.payload = await request(historyDataPath("history/" + date + ".json"), { timeoutMs: 60000 });
+      state.viewDate = date;
+      renderAll();
+      setConnection("ok", state.mode === "local" ? "本地服务已连接" : "云端报告");
+    } catch (error) {
+      toast("读取历史报告失败：" + error.message);
+      renderHistorySelect();
+      setConnection("ok", state.mode === "local" ? "本地服务已连接" : "云端报告");
+    }
   }
 
   async function loadLocalState() {
@@ -230,8 +281,10 @@
     var market = payload.market || {};
     var health = payload.health || {};
     var intraday = payload.snapshot_type === "intraday" || payload.is_provisional === true;
+    var viewingHistory = Boolean(state.viewDate);
     var upRatio = Number(market.up_ratio);
-    var reportDateLabel = (payload.report_date || "--") + (intraday ? " · 午间快照" : "");
+    var reportDateLabel = (payload.report_date || "--")
+      + (intraday ? " · 午间快照" : viewingHistory ? " · 历史" : "");
     byId("report-date").textContent = reportDateLabel;
     byId("brief-date").textContent = reportDateLabel;
     byId("sidebar-date").textContent = (intraday ? "盘中数据截止 " : "数据截止 ") + (payload.report_date || "--");
@@ -1282,6 +1335,9 @@
     byId("refresh-button").addEventListener("click", function () {
       state.schedulerDirty = false;
       load();
+    });
+    byId("history-select").addEventListener("change", function (event) {
+      selectDate(event.target.value);
     });
     byId("save-strategies-button").addEventListener("click", saveStrategies);
     byId("save-custom-strategies-button").addEventListener("click", saveCustomStrategies);
