@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -41,6 +42,36 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         errors="replace",
         capture_output=True,
     )
+
+
+_sleep = time.sleep
+
+# 访问 GitHub 的 fetch/push 常被瞬时网络故障打断（2026-09-02/03/18 各丢过一次发布），
+# 因此对可识别的瞬时错误做有限重试；认证失败、非快进等确定性错误不重试。
+_TRANSIENT_NET_ERROR_RE = re.compile(
+    r"SSL_ERROR_SYSCALL|SSL_connect|GnuTLS|Failed to connect|"
+    r"Connection (?:reset|refused|aborted|closed)|Could not resolve host|"
+    r"Recv failure|Empty reply from server|timed? ?out",
+    re.IGNORECASE,
+)
+_NET_RETRY_DELAYS = (5, 10)
+
+
+def _git_network(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """执行会访问网络的 git 命令（fetch/push），对瞬时网络故障有限重试。"""
+    result = git(*args, check=check)
+    for attempt, delay in enumerate(_NET_RETRY_DELAYS, start=2):
+        if result.returncode == 0:
+            return result
+        stderr = result.stderr or ""
+        if not _TRANSIENT_NET_ERROR_RE.search(stderr):
+            return result
+        verb = args[0] if args else "git"
+        detail = stderr.strip().splitlines()[-1] if stderr.strip() else "未知网络错误"
+        print(f"git {verb} 疑似瞬时网络故障，{delay} 秒后第 {attempt} 次尝试：{detail}")
+        _sleep(delay)
+        result = git(*args, check=check)
+    return result
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -126,7 +157,7 @@ def _fetch_target(remote: str, branch: str) -> str:
 
     remote_ref = f"refs/remotes/{remote}/{branch}"
     refspec = f"+refs/heads/{branch}:{remote_ref}"
-    fetched = git("fetch", "--no-tags", remote, refspec, check=False)
+    fetched = _git_network("fetch", "--no-tags", remote, refspec, check=False)
     if fetched.returncode != 0:
         raise _git_error(f"无法更新 {remote}/{branch}，未创建发布提交", fetched)
     resolved = git("rev-parse", "--verify", remote_ref, check=False)
@@ -141,7 +172,7 @@ def _push_branch(remote: str, branch: str, commit_sha: str) -> None:
         commit_sha,
     ):
         raise RuntimeError("发布提交无法快进目标远端分支，已停止推送")
-    pushed = git(
+    pushed = _git_network(
         "push",
         remote,
         f"{commit_sha}:refs/heads/{branch}",

@@ -268,6 +268,115 @@ def test_push_uses_validated_commit_when_local_branch_moves(
     assert remote_head(remote) != moved_sha
 
 
+def _ssl_connect_failure(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=list(args),
+        returncode=128,
+        stdout="",
+        stderr=(
+            "fatal: unable to access 'https://github.com/Super-YYQ/stock_selector.git/': "
+            "OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443"
+        ),
+    )
+
+
+def _install_flaky_git(
+    monkeypatch: pytest.MonkeyPatch,
+    verb: str,
+    failures: int,
+    failure_factory=_ssl_connect_failure,
+) -> dict[str, int]:
+    """让前 failures 次指定 git 子命令以网络故障应答失败，其余照常执行。"""
+    real_git = publish_pages.git
+    calls = {"n": 0}
+
+    def flaky_git(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args and args[0] == verb and calls["n"] < failures:
+            calls["n"] += 1
+            return failure_factory(*args)
+        return real_git(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(publish_pages, "git", flaky_git)
+    monkeypatch.setattr(publish_pages, "_sleep", lambda seconds: None, raising=False)
+    return calls
+
+
+def test_fetch_target_retries_transient_network_failure(
+    publish_repo: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fetch 遇到 SSL 连接瞬时失败时应重试并成功，而不是放弃当天发布。"""
+    repo, remote = publish_repo
+    calls = _install_flaky_git(monkeypatch, "fetch", failures=1)
+
+    sha = publish_pages._fetch_target("origin", "main")
+
+    assert calls["n"] == 1
+    assert sha == remote_head(remote)
+
+
+def test_push_branch_retries_transient_network_failure(
+    publish_repo: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """push 遇到连接超时瞬时失败时应重试并成功推送。"""
+    repo, remote = publish_repo
+    (repo / "site/data/latest.json").write_text("changed", encoding="utf-8")
+    run_git(repo, "add", "--", "site/data/latest.json")
+    run_git(repo, "commit", "-m", "test commit")
+    target_sha = run_git(repo, "rev-parse", "HEAD").stdout.strip()
+    timeout_failure = lambda *args: subprocess.CompletedProcess(
+        args=list(args),
+        returncode=128,
+        stdout="",
+        stderr="fatal: unable to access 'https://github.com/Super-YYQ/stock_selector.git/': Failed to connect to github.com port 443: Timed out",
+    )
+    calls = _install_flaky_git(
+        monkeypatch, "push", failures=1, failure_factory=timeout_failure
+    )
+
+    publish_pages._push_branch("origin", "main", target_sha)
+
+    assert calls["n"] == 1
+    assert remote_head(remote) == target_sha
+
+
+def test_fetch_target_raises_after_transient_retries_exhausted(
+    publish_repo: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """瞬时网络故障持续时应重试满全部次数，仍失败时抛出原始网络错误。"""
+    repo, remote = publish_repo
+    calls = _install_flaky_git(monkeypatch, "fetch", failures=99)
+
+    with pytest.raises(RuntimeError, match="SSL_ERROR_SYSCALL"):
+        publish_pages._fetch_target("origin", "main")
+
+    assert calls["n"] == 3
+
+
+def test_fetch_target_does_not_retry_permanent_failure(
+    publish_repo: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """认证失败等确定性错误不属于瞬时网络故障，只允许尝试一次。"""
+    repo, remote = publish_repo
+    auth_failure = lambda *args: subprocess.CompletedProcess(
+        args=list(args),
+        returncode=128,
+        stdout="",
+        stderr="fatal: Authentication failed for 'https://github.com/Super-YYQ/stock_selector.git/'",
+    )
+    calls = _install_flaky_git(
+        monkeypatch, "fetch", failures=99, failure_factory=auth_failure
+    )
+
+    with pytest.raises(RuntimeError, match="Authentication failed"):
+        publish_pages._fetch_target("origin", "main")
+
+    assert calls["n"] == 1
+
+
 def test_publish_absorbs_untracked_orphan_history_from_failed_prior_publish(
     publish_repo: tuple[Path, Path],
 ) -> None:
