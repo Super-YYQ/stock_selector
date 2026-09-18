@@ -75,7 +75,8 @@
   }
   async function request(path, options) {
     var controller = new AbortController();
-    var timer = window.setTimeout(function () { controller.abort(); }, 15000);
+    var timeoutMs = options && options.timeoutMs ? options.timeoutMs : 15000;
+    var timer = window.setTimeout(function () { controller.abort(); }, timeoutMs);
     try {
       var response = await fetch(path, Object.assign({ cache: "no-store", signal: controller.signal }, options || {}));
       if (!response.ok) {
@@ -106,7 +107,7 @@
       state.ready = true;
     } catch (apiError) {
       try {
-        state.payload = await request("data/latest.json");
+        state.payload = await request("data/latest.json", { timeoutMs: 60000 });
         state.mode = "static";
         state.ready = false;
         state.status = null;
@@ -134,7 +135,7 @@
 
   async function loadHistoryDates() {
     try {
-      var list = await request(historyDataPath("history.json"));
+      var list = await request(historyDataPath("history.json"), { timeoutMs: 60000 });
       return Array.isArray(list)
         ? list.map(function (item) { return item && item.report_date; }).filter(Boolean)
         : [];
@@ -162,7 +163,7 @@
     if (date === state.viewDate) return;
     setConnection("loading", "正在读取历史报告");
     try {
-      state.payload = await request(historyDataPath("history/" + date + ".json"));
+      state.payload = await request(historyDataPath("history/" + date + ".json"), { timeoutMs: 60000 });
       state.viewDate = date;
       renderAll();
       setConnection("ok", state.mode === "local" ? "本地服务已连接" : "云端报告");
