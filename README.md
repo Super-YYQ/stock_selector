@@ -211,7 +211,10 @@ GitHub Pages 只部署 `site/` 中的静态报告，不上传 SQLite、日志或
 
 默认访问地址：
 
-[https://super-yyq.github.io/stock_selector/](https://super-yyq.github.io/stock_selector/)
+- 主入口（国内直连推荐）：[https://stock-selector-bdw.pages.dev/](https://stock-selector-bdw.pages.dev/)（Cloudflare Pages，自动跟随 gh-pages 分支部署）
+- 备用：[https://super-yyq.github.io/stock_selector/](https://super-yyq.github.io/stock_selector/)（GitHub Pages）
+
+两条链路由同一次发布同时更新，内容一致；哪条打得开用哪条。
 
 > GitHub Pages 通常是公开页面。静态报告中不要加入账户信息、交易记录或其他隐私内容。
 

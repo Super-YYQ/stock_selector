@@ -68,9 +68,11 @@
 | B2 跳过 API 探测 | 已完成（5b27977） | 探测 1s 超时掐断（3s 慢 API 下实测 1101ms 回退） |
 | B3 404 去背景图 | 已完成（5b27977） | PNG 已删除，发布体积 -1.66MB |
 | C 脚本 defer | 已完成（5b27977） | DCL 665ms（原 ~12.9s），首屏结构先出 |
-| A Cloudflare 镜像 | 待用户决策与实测 | 38s → 3s 量级 |
+| A Cloudflare 镜像 | 已完成（2026-09-19） | 主入口 [stock-selector-bdw.pages.dev](https://stock-selector-bdw.pages.dev/)，手机直连实测明显更快 |
 
 B1–C 已随 5b27977 提交推送；随下次每日运行写入紧凑格式数据并发布上线。
+
+A 项落地记录：Cloudflare Pages 连接 `gh-pages` 分支（Production branch=gh-pages、无构建、输出目录 `/`），项目地址 `stock-selector-bdw.pages.dev`。验证：无 Access 登录墙、数据与 GitHub Pages 逐字节一致（2026-09-18 报告 + 38 天历史）。附注：Cloudflare 的 gzip 比 Fastly 更激进（同一 3.42MB JSON 压后 277KB vs 319KB，再省 13%）；本机固定网络下两入口速度随时段波动，以移动网络实测为准。GitHub Pages 保留为备用入口。
 
 B1 涉及序列化格式，需回归 `latest == 同日历史` 的发布校验；B2/C 涉及前端行为，需本地/静态双模式手测（AGENTS.md 前端规则）。
 
