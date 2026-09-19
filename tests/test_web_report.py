@@ -105,3 +105,44 @@ def test_build_report_payload_prefers_single_screener_pool_with_origin() -> None
     )
 
     assert fallback["strategy_screeners"] == legacy_catalog
+
+
+def test_static_report_serializes_compactly(tmp_path: Path) -> None:
+    """报告 JSON 采用紧凑序列化：gzip 后体积更小，慢速链路下载更快。
+
+    初始加载数据是移动端首屏的主要字节来源（latest.json 占 70%+），
+    去掉 indent=2 可在 gzip 之上再省 10-15% 传输体积。
+    """
+    template = tmp_path / "web"
+    (template / "assets").mkdir(parents=True)
+    (template / "index.html").write_text("<html>report</html>", encoding="utf-8")
+    top = pd.DataFrame(
+        [
+            {
+                "rank": 1,
+                "code": "000001",
+                "name": "测试股票",
+                "matched_strategies": "均线放量突破",
+                "total_score": 88.0,
+            }
+        ]
+    )
+    payload = build_report_payload(
+        "2026-06-22",
+        {"market_label": "偏强", "market_score": 7.5, "index_changes": {"sh000001": 1.2}},
+        pd.DataFrame([{"sector_name": "机器人", "sector_score_raw": 90}]),
+        top,
+        top,
+        pd.DataFrame([{"strategy": "均线放量突破", "sample_count": 3}]),
+        {"stock_coverage": 0.98},
+    )
+
+    write_static_report(tmp_path / "site", payload, template_dir=template)
+
+    latest_raw = (tmp_path / "site" / "data" / "latest.json").read_text(encoding="utf-8")
+    history_raw = (
+        tmp_path / "site" / "data" / "history" / "2026-06-22.json"
+    ).read_text(encoding="utf-8")
+    assert "\n" not in latest_raw
+    assert latest_raw == history_raw
+    assert json.loads(latest_raw)["report_date"] == "2026-06-22"
