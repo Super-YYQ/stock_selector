@@ -100,7 +100,9 @@
     state.ready = false;
     renderRunner((state.status && state.status.runner) || {});
     try {
-      state.payload = await request("/api/latest");
+      // 1 秒探测超时：静态站点上 /api/latest 必然 404，慢速跨境链路的往返要
+      // 1.5s+；本地面板存在时毫秒级返回，静态站点 1 秒即回退，不再白等。
+      state.payload = await request("/api/latest", { timeoutMs: 1000 });
       state.mode = "local";
       document.body.classList.remove("static-mode");
       await loadLocalState();
