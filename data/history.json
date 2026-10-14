@@ -1,5 +1,13 @@
 [
   {
+    "report_date": "2026-10-14",
+    "path": "data/history/2026-10-14.json"
+  },
+  {
+    "report_date": "2026-10-12",
+    "path": "data/history/2026-10-12.json"
+  },
+  {
     "report_date": "2026-10-09",
     "path": "data/history/2026-10-09.json"
   },
