@@ -178,7 +178,7 @@ def test_status_uses_quick_database_health(tmp_path: Path, monkeypatch) -> None:
     _project(tmp_path)
 
     class FakeDatabase:
-        def quick_data_health(self):
+        def quick_data_health(self, _excluded_boards=()):
             return {
                 "daily_rows": 123,
                 "daily_rows_exact": False,

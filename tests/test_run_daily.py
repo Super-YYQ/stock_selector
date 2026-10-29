@@ -228,6 +228,29 @@ def test_expected_market_data_requires_all_three_indexes(tmp_path: Path) -> None
         validate_expected_market_data(db, "2026-06-22", 0.90)
 
 
+def test_expected_market_data_excludes_configured_market_boards(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    _seed_market_date(
+        db,
+        "2026-06-22",
+        active_codes=("000001", "920001"),
+        daily_codes=("000001",),
+    )
+
+    result = validate_expected_market_data(
+        db,
+        "2026-06-22",
+        0.98,
+        {"fresh_stock_symbols": 1, "fresh_index_symbols": 3},
+        excluded_boards=("北交所",),
+    )
+
+    assert result["active_symbols"] == 1
+    assert result["current_symbols"] == 1
+    assert result["stock_coverage"] == 1.0
+
+
 def test_later_listed_stock_does_not_reduce_historical_date_coverage(tmp_path: Path) -> None:
     db = Database(tmp_path / "stock.db")
     db.initialize()
@@ -720,6 +743,13 @@ def test_parallel_stock_daily_failures_are_retried_sequentially(tmp_path: Path, 
     )
 
     class RetryFetcher(FakeFetcher):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
         def fetch_stock_basic(self) -> pd.DataFrame:
             return pd.DataFrame(
                 [
@@ -743,6 +773,10 @@ def test_parallel_stock_daily_failures_are_retried_sequentially(tmp_path: Path, 
                     },
                 ]
             )
+
+        def fetch_stock_daily(self, code: str, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
+            assert not self.closed
+            return super().fetch_stock_daily(code, start_date=start_date, end_date=end_date)
 
     def fake_parallel_fetch(tasks, workers, chunk_size, query_retries, reconnect_interval):
         yield (

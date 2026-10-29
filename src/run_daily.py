@@ -32,7 +32,7 @@ from src.report import write_excel_report
 from src.risk_filter import calculate_risk_penalties
 from src.run_lock import coordinated_run_lock
 from src.scoring import build_ranked_results, select_report_candidates
-from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry
+from src.sector_score import build_market_board_daily, calculate_sector_scores, fill_market_board_industry, market_board
 from src.strategies.registry import (
     build_strategy_screener_data,
     build_single_screener_pool,
@@ -228,7 +228,7 @@ def _create_tdx_fetcher(config: AppConfig) -> TdxDataFetcher:
 
 def _create_configured_fetcher(config: AppConfig) -> Any:
     provider = _data_provider(config)
-    if provider == "tdx":
+    if provider in {"tdx", "auto"}:
         return _create_tdx_fetcher(config)
     if provider in {"akshare", "eastmoney"}:
         return AkshareDataFetcher(config.data.start_date)
@@ -239,31 +239,31 @@ def _create_configured_fetcher(config: AppConfig) -> Any:
     )
 
 
-def _allows_tdx_fallback(config: AppConfig) -> bool:
-    return _data_provider(config) in {"mixed", "auto", ""}
-
-
 @contextmanager
 def _open_configured_fetcher(fetcher: Any | None, config: AppConfig, external_fetcher: bool):
     provider = _data_provider(config)
-    active_context = _managed_fetcher(fetcher or _create_configured_fetcher(config))
+    active_fetcher = fetcher or _create_configured_fetcher(config)
+    active_context = _managed_fetcher(active_fetcher)
     parallel_backend: str | None = None
     if not external_fetcher:
-        if provider == "tdx":
+        if provider in {"tdx", "auto"}:
             parallel_backend = "tdx"
-        elif provider not in {"akshare", "eastmoney"}:
+        elif provider == "mixed" or provider not in {"akshare", "eastmoney"}:
             parallel_backend = "baostock"
     try:
-        active_fetcher = active_context.__enter__()
+        opened_fetcher = active_context.__enter__()
     except Exception as exc:
-        if external_fetcher or not _allows_tdx_fallback(config) or not _is_baostock_rate_limit_error(exc):
+        if external_fetcher or provider != "mixed" or not _is_baostock_rate_limit_error(exc):
             raise
-        logging.getLogger(__name__).warning("baostock login blocked; fallback to TDX without another baostock attempt: %s", exc)
+        logging.getLogger(__name__).warning(
+            "baostock login blocked; falling back to TDX without another baostock attempt: %s",
+            exc,
+        )
         active_context = _managed_fetcher(_create_tdx_fetcher(config))
-        active_fetcher = active_context.__enter__()
+        opened_fetcher = active_context.__enter__()
         parallel_backend = "tdx"
     try:
-        yield active_fetcher, parallel_backend
+        yield opened_fetcher, parallel_backend
     finally:
         active_context.__exit__(None, None, None)
 
@@ -336,6 +336,7 @@ def validate_expected_market_data(
     expected_date: str,
     minimum_coverage: float,
     update_counts: dict[str, int] | None = None,
+    excluded_boards: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Require complete current-session data before an online report is built."""
 
@@ -378,7 +379,11 @@ def validate_expected_market_data(
                 WHERE COALESCE(is_listed, 1) = 1
                 """,
             ).fetchall()
-        expected_codes = {str(row[0]) for row in expected_rows}
+        expected_codes = {
+            str(row[0])
+            for row in expected_rows
+            if market_board(str(row[0])) not in set(excluded_boards)
+        }
         active_symbols = len(expected_codes)
         current_rows = conn.execute(
             "SELECT DISTINCT code FROM stock_daily WHERE trade_date = ?",
@@ -457,7 +462,7 @@ def _requires_requested_market_data(args: argparse.Namespace) -> bool:
 
 
 def validate_initialization(db: Database, config: AppConfig) -> dict[str, object]:
-    health = db.data_health()
+    health = db.data_health(tuple(config.stock_pool.exclude_boards))
     problems: list[str] = []
     coverage = float(health["stock_coverage"])
     daily_rows = int(health["daily_rows"])
@@ -524,6 +529,7 @@ def update_market_data(
     }
     fresh_stock_codes: set[str] = set()
     fresh_index_codes: set[str] = set()
+    excluded_boards = set(config.stock_pool.exclude_boards)
 
     with _open_configured_fetcher(fetcher, config, external_fetcher) as (active_fetcher, parallel_backend):
         if init:
@@ -578,7 +584,12 @@ def update_market_data(
         active_basic = basic.copy()
         if "is_listed" in active_basic.columns:
             active_basic = active_basic[pd.to_numeric(active_basic["is_listed"], errors="coerce").fillna(1).eq(1)]
-        codes = active_basic["code"].dropna().astype(str).str.zfill(6).drop_duplicates().tolist()
+        selected_basic = active_basic
+        if parallel_backend == "baostock" and excluded_boards:
+            selected_basic = active_basic.loc[
+                ~active_basic["code"].astype(str).str.zfill(6).map(market_board).isin(excluded_boards)
+            ]
+        codes = selected_basic["code"].dropna().astype(str).str.zfill(6).drop_duplicates().tolist()
         total = len(codes)
         skipped_symbols = 0
         tdx_managed = parallel_backend == "tdx"
@@ -645,7 +656,10 @@ def update_market_data(
                 return
             counts["stock_daily"] += db.upsert_dataframe("stock_daily", daily, ["code", "trade_date"])
             if "trade_date" in daily.columns and "code" in daily.columns:
-                fresh = daily[daily["trade_date"].astype(str).eq(report_date)]
+                fresh = daily[
+                    daily["trade_date"].astype(str).eq(report_date)
+                    & ~daily["code"].astype(str).str.zfill(6).map(market_board).isin(excluded_boards)
+                ]
                 fresh_stock_codes.update(fresh["code"].dropna().astype(str).str.zfill(6))
                 counts["fresh_stock_symbols"] = len(fresh_stock_codes)
             record_tdx_sync(daily)
@@ -653,8 +667,6 @@ def update_market_data(
         def retry_stock_tasks_sequentially(tasks: list[tuple[str, str, str]], reason: str) -> None:
             if not tasks:
                 return
-            if hasattr(active_fetcher, "close"):
-                active_fetcher.close()
             logger.info("retrying %s stock daily tasks sequentially after %s", len(tasks), reason)
             for position, (code, fetch_start, fetch_end) in enumerate(tasks, start=1):
                 if position == 1 or position % 100 == 0 or position == len(tasks):
@@ -849,6 +861,7 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
                 preliminary_date,
                 config.data.min_latest_stock_coverage,
                 (update_counts or {}) if requires_fresh_update else None,
+                tuple(config.stock_pool.exclude_boards),
             )
             logger.info(
                 "%s 行情校验通过：股票 %s/%s（%.1f%%），指数 %s/%s",
@@ -860,7 +873,7 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
                 len(INDEX_CODES),
             )
 
-        health = db.quick_data_health()
+        health = db.quick_data_health(tuple(config.stock_pool.exclude_boards))
         latest_trade_date = health.get("latest_trade_date")
         report_date = (
             preliminary_date
@@ -985,7 +998,7 @@ def _run_with_args(args: argparse.Namespace) -> Path | None:
         else:
             logger.info("盘中快照不写入正式入选与未来收益历史")
         performance = db.strategy_performance()
-        health = db.quick_data_health()
+        health = db.quick_data_health(tuple(config.stock_pool.exclude_boards))
 
         with _report_output_stage(
             logger,

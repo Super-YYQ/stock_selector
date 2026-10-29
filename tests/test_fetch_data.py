@@ -92,167 +92,74 @@ def test_tdx_market_covers_shenzhen_shanghai_and_beijing() -> None:
 
 
 
-def test_tdx_fetcher_switches_host_after_connection_failure() -> None:
+def test_tdxdata_fetcher_maps_async_bars_without_lot_conversion() -> None:
+    from types import SimpleNamespace
+
     from src.fetch_data import TdxDataFetcher
 
-    class FakeApi:
-        def __init__(self, connects: bool) -> None:
-            self.connects = connects
+    calls: list[tuple[str, dict[str, object]]] = []
+    factory_kwargs: dict[str, object] = {}
 
-        def connect(self, ip: str, port: int, time_out: float) -> bool:
-            return self.connects
+    def bar(trade_date: str, close: float, volume: float) -> SimpleNamespace:
+        return SimpleNamespace(
+            trading_date=trade_date,
+            open=close - 0.2,
+            high=close + 0.2,
+            low=close - 0.3,
+            close=close,
+            vol=volume,
+            amount=volume * close,
+        )
 
-        def disconnect(self) -> None:
-            pass
+    class FakeTdxData:
+        def __init__(self, **kwargs: object) -> None:
+            factory_kwargs.update(kwargs)
 
-        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
-            return self.get_security_bars(category, market, code, start, count)
+        async def __aenter__(self):
+            return self
 
-        def get_security_bars(self, category: int, market: int, code: str, start: int, count: int):
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get_bars(self, symbol: str, _period: object, **kwargs: object):
+            calls.append((symbol, kwargs))
+            if symbol == "sh000001":
+                return [bar("2026-10-22", 3020, 120)]
             return [
-                {
-                    "open": 10,
-                    "close": 10.5,
-                    "high": 10.6,
-                    "low": 9.9,
-                    "vol": 1000,
-                    "amount": 1050000,
-                    "datetime": "2026-06-22 15:00",
-                }
+                bar("2026-10-20", 10.0, 1000),
+                bar("2026-10-21", 10.0, 1100),
+                bar("2026-10-22", 10.5, 1200),
+                bar("2026-10-23", 10.7, 1300),
             ]
 
-    apis = iter([FakeApi(False), FakeApi(True)])
     fetcher = TdxDataFetcher(
-        "2026-06-01",
-        query_retries=2,
-        hosts=(("bad", "127.0.0.1", 1), ("good", "127.0.0.2", 2)),
-        api_factory=lambda: next(apis),
+        "2026-10-01",
+        hosts=(("first", "127.0.0.1", 7709), ("second", "127.0.0.2", 7709)),
+        client_factory=FakeTdxData,
     )
 
     with fetcher:
-        daily = fetcher.fetch_stock_daily("000001", "2026-06-01", "2026-06-22")
+        daily = fetcher.fetch_stock_daily("920001", "2026-10-22", "2026-10-23")
+        index = fetcher.fetch_index_daily("sh000001", "2026-10-22", "2026-10-22")
 
-    assert daily["code"].tolist() == ["000001"]
-    assert daily["trade_date"].tolist() == ["2026-06-22"]
+    assert factory_kwargs["standard_servers"] == ["127.0.0.1", "127.0.0.2"]
+    assert factory_kwargs["std_pool_cap"] == 1
+    assert [symbol for symbol, _kwargs in calls] == ["sh000001", "bj920001", "sh000001"]
+    assert daily["trade_date"].tolist() == ["2026-10-22", "2026-10-23"]
+    assert daily["volume"].tolist() == [1200.0, 1300.0]
+    assert round(float(daily.loc[0, "pct_chg"]), 6) == 5.0
+    assert index["index_code"].tolist() == ["sh000001"]
+    assert index["volume"].tolist() == [120.0]
 
 
-def test_tdx_initial_connection_checks_every_configured_host() -> None:
+def test_tdxdata_fetcher_rejects_mixed_ports() -> None:
     from src.fetch_data import TdxDataFetcher
 
-    attempted: list[str] = []
-
-    class FakeApi:
-        def connect(self, ip: str, port: int, time_out: float) -> bool:
-            attempted.append(ip)
-            return ip == "127.0.0.3"
-
-        def disconnect(self) -> None:
-            pass
-
-        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
-            return [{"open": 1, "close": 1, "high": 1, "low": 1, "vol": 1, "amount": 1, "datetime": "2026-06-22 15:00"}]
-
-    fetcher = TdxDataFetcher(
-        "2026-06-01",
-        query_retries=1,
-        hosts=(
-            ("first", "127.0.0.1", 7709),
-            ("second", "127.0.0.2", 7709),
-            ("third", "127.0.0.3", 7709),
-        ),
-        api_factory=FakeApi,
-    )
-
-    with fetcher:
-        pass
-
-    assert attempted == ["127.0.0.1", "127.0.0.2", "127.0.0.3"]
-
-
-class _ProbeBar(dict):
-    """One daily bar in the shape pytdx returns."""
-
-    def __init__(self) -> None:
-        super().__init__(open=10, close=10.5, high=10.6, low=9.9, vol=1000, amount=1050000, datetime="2026-06-22 15:00")
-
-
-def test_tdx_fetcher_skips_host_that_connects_but_serves_no_bars() -> None:
-    from src.fetch_data import TdxDataFetcher
-
-    calls: list[str] = []
-
-    class StubHostApi:
-        """Reproduces the 2026-09 failure: connect succeeds, bar requests return an unparseable stub."""
-
-        def connect(self, ip: str, port: int, time_out: float) -> bool:
-            calls.append(f"connect:{ip}")
-            return True
-
-        def disconnect(self) -> None:
-            pass
-
-        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
-            calls.append(f"index:{code}")
-            error = RuntimeError("calling function error")
-            error.original_exception = ValueError("unpack requires a buffer of 4 bytes")
-            raise error
-
-        def get_security_bars(self, *args):
-            raise AssertionError("stub host must not receive stock requests")
-
-    class HealthyHostApi(StubHostApi):
-        def get_index_bars(self, category: int, market: int, code: str, start: int, count: int):
-            calls.append(f"index:{code}")
-            return [_ProbeBar()]
-
-        def get_security_bars(self, category: int, market: int, code: str, start: int, count: int):
-            calls.append(f"stock:{code}")
-            return [_ProbeBar()]
-
-    apis = iter([StubHostApi(), HealthyHostApi()])
-    fetcher = TdxDataFetcher(
-        "2026-06-01",
-        query_retries=1,
-        hosts=(("stub", "127.0.0.1", 7709), ("healthy", "127.0.0.2", 7709)),
-        api_factory=lambda: next(apis),
-    )
-
-    with fetcher:
-        daily = fetcher.fetch_stock_daily("000001", "2026-06-01", "2026-06-22")
-
-    assert daily["trade_date"].tolist() == ["2026-06-22"]
-    assert calls == ["connect:127.0.0.1", "index:000001", "connect:127.0.0.2", "index:000001", "stock:000001"]
-
-
-def test_tdx_fetcher_error_message_keeps_original_exception() -> None:
-    from src.fetch_data import TdxDataFetcher
-
-    class BrokenApi:
-        def connect(self, ip: str, port: int, time_out: float) -> bool:
-            return True
-
-        def disconnect(self) -> None:
-            pass
-
-        def get_index_bars(self, *args):
-            error = RuntimeError("calling function error")
-            error.original_exception = ValueError("unpack requires a buffer of 4 bytes")
-            raise error
-
-    fetcher = TdxDataFetcher(
-        "2026-06-01",
-        query_retries=1,
-        hosts=(("only", "127.0.0.1", 7709),),
-        api_factory=BrokenApi,
-    )
-
-    with pytest.raises(RuntimeError) as excinfo:
-        with fetcher:
-            pass
-
-    message = str(excinfo.value)
-    assert message.startswith("all configured TDX hosts failed")
-    assert "only: calling function error (ValueError: unpack requires a buffer of 4 bytes)" in message
+    with pytest.raises(ValueError, match="same port"):
+        TdxDataFetcher(
+            "2026-10-01",
+            hosts=(("first", "127.0.0.1", 7709), ("second", "127.0.0.2", 7727)),
+        )
 
 
 def test_parse_tdx_hosts_accepts_ip_port_and_rejects_malformed_entries() -> None:
@@ -272,11 +179,11 @@ def test_parse_tdx_hosts_accepts_ip_port_and_rejects_malformed_entries() -> None
 def test_fetch_tdx_stock_daily_parallel_passes_hosts_to_workers(monkeypatch) -> None:
     from src import tdx_fetcher as tdx_module
 
-    captured: list[tuple] = []
+    captured: list[tuple[tuple, int]] = []
 
     class RecordingFetcher:
         def __init__(self, start_date: str, **kwargs) -> None:
-            captured.append(kwargs["hosts"])
+            captured.append((kwargs["hosts"], kwargs["host_offset"]))
 
         def __enter__(self) -> "RecordingFetcher":
             return self
@@ -292,7 +199,7 @@ def test_fetch_tdx_stock_daily_parallel_passes_hosts_to_workers(monkeypatch) -> 
     batches = list(
         tdx_module.fetch_tdx_stock_daily_parallel(
             [("000001", "2026-06-01", "2026-06-22"), ("000002", "2026-06-01", "2026-06-22")],
-            workers=1,
+            workers=2,
             chunk_size=1,
             timeout_seconds=3,
             query_retries=1,
@@ -300,7 +207,7 @@ def test_fetch_tdx_stock_daily_parallel_passes_hosts_to_workers(monkeypatch) -> 
         )
     )
 
-    assert captured == [hosts, hosts]
+    assert captured == [(hosts, 0), (hosts, 0)]
     assert [len(daily) for daily, _failures, _requested in batches] == [1, 1]
 
 
@@ -453,6 +360,7 @@ def test_normalize_baostock_index_daily_sets_index_code() -> None:
     assert normalized.loc[0, "index_code"] == "sh000001"
     assert normalized.loc[0, "trade_date"] == "2026-06-22"
     assert normalized.loc[0, "pct_chg"] == 1.2
+
 
 def test_data_fetcher_reuses_baostock_login_across_context(monkeypatch) -> None:
     import sys

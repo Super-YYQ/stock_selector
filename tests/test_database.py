@@ -156,6 +156,39 @@ def test_quick_data_health_avoids_full_row_count_and_uses_active_symbol_exists(
     assert health["daily_rows_source"] == "max_rowid_estimate"
 
 
+def test_health_excludes_configured_market_boards(tmp_path: Path) -> None:
+    db = Database(tmp_path / "stock.db")
+    db.initialize()
+    db.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"code": "000001", "name": "A", "is_listed": 1},
+                {"code": "920001", "name": "BJ", "is_listed": 1},
+            ]
+        ),
+        ["code"],
+    )
+    db.upsert_dataframe(
+        "stock_daily",
+        pd.DataFrame(
+            [
+                {"code": "000001", "trade_date": "2026-10-28", "close": 10},
+                {"code": "920001", "trade_date": "2026-10-27", "close": 20},
+            ]
+        ),
+        ["code", "trade_date"],
+    )
+
+    health = db.quick_data_health(("北交所",))
+
+    assert health["active_symbols"] == 1
+    assert health["covered_symbols"] == 1
+    assert health["latest_symbol_count"] == 1
+    assert health["latest_stock_coverage"] == 1.0
+
+
+
 def test_exact_data_health_populates_quick_row_count_metadata(tmp_path: Path) -> None:
     db = Database(tmp_path / "stock.db")
     db.initialize()

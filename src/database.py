@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.config import PerformanceConfig
 from src.performance import HORIZONS, evaluate_selection_returns
+from src.sector_score import market_board
 
 
 LOGGER = logging.getLogger(__name__)
@@ -364,12 +365,33 @@ class Database:
     def _max_stock_daily_rowid(conn: sqlite3.Connection) -> int:
         return int(conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM stock_daily").fetchone()[0])
 
-    def _health_snapshot(self, *, exact_daily_rows: bool) -> dict[str, object]:
+    def _health_snapshot(
+        self,
+        *,
+        exact_daily_rows: bool,
+        excluded_boards: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        excluded = set(excluded_boards)
         with self.connect() as conn:
-            active_symbols = int(
-                conn.execute("SELECT COUNT(*) FROM stock_basic WHERE COALESCE(is_listed, 1) = 1").fetchone()[0]
-            )
-            covered_symbols = self._active_symbol_count(conn)
+            listed_codes = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT code FROM stock_basic WHERE COALESCE(is_listed, 1) = 1"
+                ).fetchall()
+            ]
+            eligible_codes = {code for code in listed_codes if market_board(code) not in excluded}
+            active_symbols = len(eligible_codes)
+            covered_rows = conn.execute(
+                """
+                SELECT b.code
+                FROM stock_basic b
+                WHERE COALESCE(b.is_listed, 1) = 1
+                  AND EXISTS (
+                      SELECT 1 FROM stock_daily d WHERE d.code = b.code
+                  )
+                """
+            ).fetchall()
+            covered_symbols = len(eligible_codes.intersection(str(row[0]) for row in covered_rows))
             current_max_rowid = self._max_stock_daily_rowid(conn)
             daily_rows_updated_at: str | None = None
             if exact_daily_rows:
@@ -413,7 +435,19 @@ class Database:
             latest_trade_date = conn.execute("SELECT MAX(trade_date) FROM stock_daily").fetchone()[0]
             latest_symbol_count = 0
             if latest_trade_date:
-                latest_symbol_count = self._active_symbol_count(conn, str(latest_trade_date))
+                latest_rows = conn.execute(
+                    """
+                    SELECT b.code
+                    FROM stock_basic b
+                    WHERE COALESCE(b.is_listed, 1) = 1
+                      AND EXISTS (
+                          SELECT 1 FROM stock_daily d
+                          WHERE d.code = b.code AND d.trade_date = ?
+                      )
+                    """,
+                    (str(latest_trade_date),),
+                ).fetchall()
+                latest_symbol_count = len(eligible_codes.intersection(str(row[0]) for row in latest_rows))
         coverage = covered_symbols / active_symbols if active_symbols else 0.0
         latest_coverage = latest_symbol_count / active_symbols if active_symbols else 0.0
         return {
@@ -430,13 +464,13 @@ class Database:
             "latest_stock_coverage": latest_coverage,
         }
 
-    def data_health(self) -> dict[str, object]:
+    def data_health(self, excluded_boards: tuple[str, ...] = ()) -> dict[str, object]:
         """Return validation-grade health data and refresh the row-count metadata."""
-        return self._health_snapshot(exact_daily_rows=True)
+        return self._health_snapshot(exact_daily_rows=True, excluded_boards=excluded_boards)
 
-    def quick_data_health(self) -> dict[str, object]:
+    def quick_data_health(self, excluded_boards: tuple[str, ...] = ()) -> dict[str, object]:
         """Return panel health without scanning every row in ``stock_daily``."""
-        return self._health_snapshot(exact_daily_rows=False)
+        return self._health_snapshot(exact_daily_rows=False, excluded_boards=excluded_boards)
 
     def save_selections(self, report_date: str, ranked: pd.DataFrame, top_n: int = 50) -> int:
         selected = ranked.head(top_n).copy()

@@ -29,14 +29,14 @@ Windows 本机的工作日定时任务在面板 **运行状态 → 定时执行*
 
 | 参数 | 默认值 | 作用与调参影响 |
 |---|---:|---|
-| `provider` | `tdx` | 行情数据源。推荐 `tdx`，无需账号登录；`akshare` / `eastmoney` 使用 AKShare 接口；`baostock` 使用 Baostock；`mixed` / `auto` 会在 Baostock 被限流或拉黑时转到 TDX。 |
+| `provider` | `tdx` | 行情数据源。`tdx` 使用 `pytdxdata` 通达信客户端，无需账号登录；`auto` 是 `tdx` 的兼容别名；`akshare` / `eastmoney` 使用 AKShare 接口；`baostock` 使用 Baostock；`mixed` 先用 Baostock，登录被限流或拉黑时才切到 TDX。 |
 | `database` | `data/stock.db` | SQLite 数据库路径，相对仓库根目录。 |
 | `start_date` | `2023-01-01` | 首次初始化的历史起始日期。越早，初始化越慢、数据库越大；建议至少保留 180 至 240 个交易日。 |
 | `tdx_parallel_workers` | `4` | TDX 初始化并发数。网络稳定时可小幅提高；过高可能增加断线，不建议超过 8。 |
 | `tdx_parallel_chunk_size` | `50` | 每个 TDX 工作批次的股票数。通常无需修改。 |
 | `tdx_timeout_seconds` | `3` | 单次 TDX 网络请求超时秒数。网络较慢可改为 5 至 8。 |
 | `tdx_query_retries` | `3` | TDX 单次查询最大尝试次数。失败后仍会记录并继续其他股票。 |
-| `tdx_hosts` | `[]` | TDX 行情节点列表，每项为 `ip:port`。留空使用内置的国泰君安节点（`117.34.114.14/16/17/18/20/27:7709`）。每次建立连接后会先请求一根上证指数日线做健康探测，连得上但返回不了 K 线的节点会被自动跳过。2026-09-10 起通达信官方主站不再为本程序使用的协议返回 K 线，若内置节点也失效，可在此填入其他可用节点。 |
+| `tdx_hosts` | `[]` | TDX 行情节点列表，每项为 `ip:port`。留空使用内置的多节点标准行情清单；新版客户端启动时建立连接池，并以一根上证指数日线验证真实 K 线。连得上但返回不了 K 线的节点会被自动跳过。自定义节点需要使用标准 TDX 7709 端口。 |
 | `init_min_stock_coverage` | `0.90` | 初始化验收的最低股票覆盖率。低于此值时初始化判定失败，防止用残缺数据生成结果。 |
 | `min_latest_stock_coverage` | `0.98` | 当前报告日行情的最低股票覆盖率。低于此值时停止生成报告，避免少量新行情与大量旧行情混排。 |
 | `init_min_daily_rows` | `100000` | 初始化验收的最低日线总记录数。 |
